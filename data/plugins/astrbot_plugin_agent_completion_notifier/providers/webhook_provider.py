@@ -6,10 +6,10 @@ from typing import Any
 
 from aiohttp import web
 
-from ..services.agent_notification_service import NotificationRequestError
+from ..services.notification_service import NotificationRequestError
 
 
-class AgentWebhookProvider:
+class WebhookProvider:
     """Small authenticated HTTP ingress owned by the plugin lifecycle."""
 
     def __init__(
@@ -17,7 +17,7 @@ class AgentWebhookProvider:
         config: dict[str, Any],
         callback: Callable[[Any], Awaitable[dict[str, Any]]],
     ) -> None:
-        self.config = config["agent_notification"]
+        self.config = config
         self.callback = callback
         self._runner: web.AppRunner | None = None
         self.started = False

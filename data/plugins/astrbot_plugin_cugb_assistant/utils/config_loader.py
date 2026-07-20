@@ -46,18 +46,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "llm": {
         "enable_tools": True,
     },
-    "agent_notification": {
-        "enabled": False,
-        "host": "127.0.0.1",
-        "port": 8766,
-        "path": "/api/hooks/agent-completed",
-        "secret": "",
-        "target_umo": "",
-        "database": "agent_notifications.sqlite",
-        "allowed_sources": ["codex", "opencode"],
-        "max_body_bytes": 16384,
-        "max_message_chars": 1500,
-    },
 }
 
 

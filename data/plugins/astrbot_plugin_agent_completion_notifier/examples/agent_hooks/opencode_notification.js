@@ -1,4 +1,4 @@
-/** Adapt OpenCode's session.idle event to the assistant webhook protocol. */
+/** Adapt OpenCode's session.idle event to the AstrBot webhook protocol. */
 export const AgentCompletionQQPlugin = async ({ client, directory }) => {
   return {
     event: async ({ event }) => {

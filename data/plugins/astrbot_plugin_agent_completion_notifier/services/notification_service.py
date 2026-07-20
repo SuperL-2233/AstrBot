@@ -18,14 +18,14 @@ class NotificationRequestError(Exception):
         return self.message
 
 
-class AgentNotificationService:
+class NotificationService:
     EVENT_BY_SOURCE = {
         "codex": "agent-turn-complete",
         "opencode": "session.idle",
     }
 
     def __init__(self, config: dict[str, Any], repository: NotificationRepository) -> None:
-        self.config = config["agent_notification"]
+        self.config = config
         self.repository = repository
 
     def get_target_umo(self) -> str:

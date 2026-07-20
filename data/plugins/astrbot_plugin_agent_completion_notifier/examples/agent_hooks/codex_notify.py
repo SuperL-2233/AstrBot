@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adapt Codex's external notifier payload to the assistant webhook protocol."""
+"""Adapt Codex's external notifier payload to the AstrBot webhook protocol."""
 
 from __future__ import annotations
 
