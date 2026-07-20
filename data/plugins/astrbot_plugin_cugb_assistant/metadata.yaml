@@ -1,0 +1,7 @@
+name: astrbot_plugin_cugb_assistant
+display_name: CUGB 校园助手插件
+author: macroladlezilla
+description: 面向 CUGB 校园生活的 AstrBot 插件，提供课程表、空教室、作业与状态查询能力。
+short_desc: CUGB 课程表、空教室和作业助手。
+version: 0.1.0
+repo: https://github.com/macroladlezilla/astrbot_plugin_cugb_assistant

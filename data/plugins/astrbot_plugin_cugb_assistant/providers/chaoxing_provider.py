@@ -1,0 +1,17 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class ChaoxingProvider(Protocol):
+    async def get_pending_homework(self, course_name: str = "") -> dict:
+        ...
+
+    async def get_recent_deadlines(self, within_days: int = 7) -> dict:
+        ...
+
+    async def refresh(self) -> dict:
+        ...
+
+    async def get_status(self) -> dict:
+        ...

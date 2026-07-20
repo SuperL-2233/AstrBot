@@ -96,6 +96,28 @@ def calculate_metrics(user_id: int, force_refresh: bool = False) -> dict:
 ```
 
 
+## CUGB assistant plugin
+
+The custom plugin is located at `data/plugins/astrbot_plugin_cugb_assistant/`. Only this plugin source directory is allowlisted under the otherwise ignored `data/` tree. Do not commit `data/config/`, `data/plugin_data/`, SQLite databases, imported timetables, QQ identifiers, credentials, or caches.
+
+Keep plugin responsibilities separated:
+
+- `main.py`: AstrBot registration, lifecycle, permission checks, argument parsing, orchestration, and formatting calls.
+- `services/`: business behavior and stable result contracts.
+- `repositories/`: SQLite reads and writes only.
+- `providers/`: external systems or real local caches.
+- `formatters/`: pure presentation.
+
+Do not add simulated runtime providers or return simulated production data. Integrations that are unavailable must return an explicit disabled, unsupported, or not-implemented status.
+
+After each substantial plugin change:
+
+1. Run `.venv/bin/python -m pytest -q tests/test_cugb_assistant_plugin.py`.
+2. Update the workspace-level `../docs/architecture.md` for architecture or data-flow changes.
+3. Update `../docs/implementation-status.md` for capability, limitation, provider, command, tool, or configuration changes.
+4. Commit this repository first using a conventional commit message.
+5. Commit the workspace repository afterward so its documentation records the related project-level change.
+
 ## PR instructions
 
 1. Title format: use conventional commit messages

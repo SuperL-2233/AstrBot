@@ -1,0 +1,176 @@
+{
+  "user": {
+    "type": "object",
+    "description": "用户基础配置",
+    "items": {
+      "qq_id": {
+        "type": "string",
+        "description": "个人课程表所属 QQ 号",
+        "default": ""
+      },
+      "timezone": {
+        "type": "string",
+        "description": "时区",
+        "default": "Asia/Shanghai"
+      }
+    }
+  },
+  "permission": {
+    "type": "object",
+    "description": "权限控制",
+    "items": {
+      "allowed_private_users": {
+        "type": "list",
+        "description": "允许使用插件的私聊用户 ID",
+        "default": []
+      },
+      "allowed_groups": {
+        "type": "list",
+        "description": "允许使用插件的群 ID",
+        "default": []
+      },
+      "only_owner_can_query_personal_schedule": {
+        "type": "bool",
+        "description": "仅允许课表所属用户查询个人课程表",
+        "default": true
+      }
+    }
+  },
+  "course": {
+    "type": "object",
+    "description": "课程表配置",
+    "items": {
+      "timetable_file": {
+        "type": "string",
+        "description": "本地课程表文件名，默认从插件数据目录解析",
+        "default": "raw_timetable.xlsx"
+      },
+      "database": {
+        "type": "string",
+        "description": "课程表数据库文件名",
+        "default": "courses.sqlite"
+      }
+    }
+  },
+  "classroom": {
+    "type": "object",
+    "description": "空教室配置",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "是否启用空教室模块",
+        "default": true
+      },
+      "provider": {
+        "type": "string",
+        "description": "空教室数据来源",
+        "default": "mportal",
+        "options": ["mportal", "cache", "disabled"]
+      },
+      "database": {
+        "type": "string",
+        "description": "空教室缓存数据库文件名",
+        "default": "classrooms.sqlite"
+      },
+      "mportal_base_url": {
+        "type": "string",
+        "description": "空教室门户基础地址",
+        "default": "https://mportal.cugb.edu.cn"
+      },
+      "mportal_campus_id": {
+        "type": "string",
+        "description": "空教室门户校区编号，默认 1",
+        "default": "1"
+      },
+      "mportal_page_size": {
+        "type": "int",
+        "description": "空教室门户单页数量",
+        "default": 50
+      },
+      "mportal_max_pages": {
+        "type": "int",
+        "description": "空教室门户最大翻页数",
+        "default": 10
+      },
+      "mportal_timeout_seconds": {
+        "type": "int",
+        "description": "空教室门户请求超时时间（秒）",
+        "default": 10
+      },
+      "mportal_refresh_buildings": {
+        "type": "list",
+        "description": "定时刷新教学楼列表，留空表示刷新门户返回的全部教学楼",
+        "default": []
+      },
+      "update_interval_minutes": {
+        "type": "int",
+        "description": "空教室刷新间隔（分钟）",
+        "default": 120
+      },
+      "cache_expire_minutes": {
+        "type": "int",
+        "description": "缓存过期时间（分钟）",
+        "default": 120
+      }
+    }
+  },
+  "reminder": {
+    "type": "object",
+    "description": "提醒配置",
+    "items": {
+      "enable_class_reminder": {
+        "type": "bool",
+        "description": "是否启用课前提醒",
+        "default": true
+      },
+      "before_class_minutes": {
+        "type": "int",
+        "description": "课前提醒时间",
+        "default": 20
+      },
+      "enable_homework_reminder": {
+        "type": "bool",
+        "description": "是否启用作业提醒",
+        "default": true
+      }
+    }
+  },
+  "chaoxing": {
+    "type": "object",
+    "description": "学习通配置",
+    "items": {
+      "enable": {
+        "type": "bool",
+        "description": "是否启用学习通",
+        "default": false
+      },
+      "provider": {
+        "type": "string",
+        "description": "学习通数据来源",
+        "default": "disabled",
+        "options": ["cache", "disabled"]
+      },
+      "database": {
+        "type": "string",
+        "description": "作业缓存数据库文件名",
+        "default": "homework.sqlite"
+      },
+      "update_interval_minutes": {
+        "type": "int",
+        "description": "作业刷新间隔（分钟）",
+        "default": 120
+      }
+    }
+  },
+  "llm": {
+    "type": "object",
+    "description": "LLM 工具配置",
+    "items": {
+      "enable_tools": {
+        "type": "bool",
+        "description": "是否启用插件 LLM tools",
+        "default": true
+      }
+    }
+  }
+}

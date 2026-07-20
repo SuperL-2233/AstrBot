@@ -20,7 +20,11 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
-data
+data/*
+!data/plugins/
+data/plugins/*
+!data/plugins/astrbot_plugin_cugb_assistant/
+!data/plugins/astrbot_plugin_cugb_assistant/**
 configs/session
 configs/config.yaml
 cmd_config.json
@@ -52,7 +56,6 @@ astrbot.lock
 chroma
 venv/*
 pytest.ini
-AGENTS.md
 IFLOW.md
 
 # genie_tts data
