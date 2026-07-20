@@ -5,7 +5,7 @@ import json
 from contextlib import suppress
 
 from astrbot.api import llm_tool, logger, star
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
 from .formatters.classroom_formatter import format_classroom_list, format_recommendations
@@ -13,12 +13,15 @@ from .formatters.course_formatter import format_course_list, format_single_cours
 from .formatters.homework_formatter import format_homework_list
 from .formatters.status_formatter import format_status
 from .importers.import_timetable import TimetableImporter
+from .providers.agent_webhook_provider import AgentWebhookProvider
 from .providers.chaoxing_cache_provider import ChaoxingCacheProvider
 from .providers.classroom_cache_provider import ClassroomCacheProvider
 from .providers.classroom_mportal_provider import ClassroomMportalProvider
 from .repositories.classroom_repo import ClassroomRepository
 from .repositories.course_repo import CourseRepository
 from .repositories.homework_repo import HomeworkRepository
+from .repositories.notification_repo import NotificationRepository
+from .services.agent_notification_service import AgentNotificationService
 from .services.chaoxing_service import ChaoxingService
 from .services.classroom_service import ClassroomService
 from .services.course_service import CourseService
@@ -34,7 +37,7 @@ from .utils.time_utils import combine_date_time, today_local
     "astrbot_plugin_cugb_assistant",
     "macroladlezilla",
     "CUGB 校园助手插件",
-    "0.1.0",
+    "0.2.0",
 )
 class CugbAssistantPlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -45,6 +48,9 @@ class CugbAssistantPlugin(star.Star):
         course_repo = CourseRepository(resolve_data_path(self.config["course"]["database"]))
         classroom_repo = ClassroomRepository(resolve_data_path(self.config["classroom"]["database"]))
         homework_repo = HomeworkRepository(resolve_data_path(self.config["chaoxing"]["database"]))
+        notification_repo = NotificationRepository(
+            resolve_data_path(self.config["agent_notification"]["database"])
+        )
 
         importer = TimetableImporter(resolve_data_path(self.config["course"]["timetable_file"]))
         self.course_service = CourseService(course_repo, importer)
@@ -64,14 +70,29 @@ class CugbAssistantPlugin(star.Star):
         if self.config["chaoxing"].get("provider") == "cache":
             chaoxing_provider = ChaoxingCacheProvider(homework_repo)
         self.chaoxing_service = ChaoxingService(self.config, chaoxing_provider)
+        self.agent_notification_service = AgentNotificationService(self.config, notification_repo)
+        self.agent_webhook_provider = AgentWebhookProvider(
+            self.config,
+            self._deliver_agent_notification,
+        )
 
     async def initialize(self) -> None:
         logger.info("astrbot_plugin_cugb_assistant initialized")
         classroom_cfg = self.config["classroom"]
         if classroom_cfg.get("enabled", True) and classroom_cfg.get("provider") == "mportal":
             self._classroom_refresh_task = asyncio.create_task(self._run_classroom_refresh_loop())
+        try:
+            await self.agent_webhook_provider.start()
+            if self.agent_webhook_provider.started:
+                cfg = self.config["agent_notification"]
+                logger.info(f"开发工具通知接收器已监听 {cfg['host']}:{cfg['port']}{cfg['path']}")
+            else:
+                logger.info(f"开发工具通知接收器未启动: {self.agent_webhook_provider.disabled_reason}")
+        except Exception as exc:
+            logger.error(f"开发工具通知接收器启动失败: {exc}")
 
     async def terminate(self) -> None:
+        await self.agent_webhook_provider.stop()
         if self._classroom_refresh_task:
             self._classroom_refresh_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -96,12 +117,31 @@ class CugbAssistantPlugin(star.Star):
     def _schedule_access_error(self, event: AstrMessageEvent) -> str | None:
         return ensure_personal_schedule_access(event, self.config)
 
+    def _notification_binding_access_error(self, event: AstrMessageEvent) -> str | None:
+        owner_id = str(self.config["user"].get("qq_id", "")).strip()
+        if not owner_id:
+            return "请先在插件配置中设置 user.qq_id，才能绑定开发通知目标。"
+        if not event.is_private_chat() or event.get_sender_id() != owner_id:
+            return "仅允许配置的 QQ 所有者在私聊中绑定开发通知目标。"
+        return None
+
+    async def _deliver_agent_notification(self, payload: object) -> dict:
+        async def send(target_umo: str, text: str) -> bool:
+            return await self.context.send_message(target_umo, MessageChain().message(text))
+
+        return await self.agent_notification_service.deliver(payload, send)
+
     async def _build_status(self) -> dict:
         return {
             "course": self.course_service.get_status()["data"],
             "classroom": await self.classroom_service.get_status(),
             "chaoxing": await self.chaoxing_service.get_status(),
             "reminder": self.reminder_service.get_status(),
+            "agent_notification": {
+                **self.agent_notification_service.get_status(),
+                "listener_started": self.agent_webhook_provider.started,
+                "disabled_reason": self.agent_webhook_provider.disabled_reason,
+            },
         }
 
     @filter.command("校园助手帮助", alias={"cugb帮助", "校园帮助"})
@@ -128,6 +168,8 @@ class CugbAssistantPlugin(star.Star):
                 "/作业 [最近|课程名]",
                 "/学习通状态",
                 "/学习通刷新",
+                "/开发通知绑定",
+                "/开发通知解绑",
             ]
         )
         yield event.plain_result(text)
@@ -140,6 +182,26 @@ class CugbAssistantPlugin(star.Star):
             yield event.plain_result(access_error)
             return
         yield event.plain_result(format_status(await self._build_status()))
+
+    @filter.command("开发通知绑定")
+    async def bind_agent_notification(self, event: AstrMessageEvent):
+        """将开发工具结束通知绑定到当前 QQ 私聊会话。"""
+        access_error = self._notification_binding_access_error(event)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        self.agent_notification_service.bind_target(event.unified_msg_origin)
+        yield event.plain_result("已将 Codex/OpenCode 对话结束通知绑定到当前私聊。")
+
+    @filter.command("开发通知解绑")
+    async def unbind_agent_notification(self, event: AstrMessageEvent):
+        """清除持久化的开发工具通知目标。"""
+        access_error = self._notification_binding_access_error(event)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        self.agent_notification_service.clear_target()
+        yield event.plain_result("已解除开发工具通知绑定。")
 
     @filter.command("课程表刷新")
     async def refresh_timetable(self, event: AstrMessageEvent):
