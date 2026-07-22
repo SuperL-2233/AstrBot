@@ -140,6 +140,7 @@ class NotificationService:
             "event_id": self._field(payload, "event_id", 200),
             "session_id": self._field(payload, "session_id", 200),
             "project": self._optional_field(payload, "project", 200),
+            "host": self._optional_field(payload, "host", 64),
             "message": self._optional_field(payload, "message", 12000),
         }
 
@@ -173,7 +174,8 @@ class NotificationService:
 
     def _format_message(self, data: dict[str, str]) -> str:
         source_name = "Codex" if data["source"] == "codex" else "OpenCode"
-        lines = [f"服务器-{source_name} 会话结束", f"会话：{data['session_id']}"]
+        label = data["host"] or f"服务器-{source_name}"
+        lines = [f"{label} 会话结束", f"会话：{data['session_id']}"]
         if data["message"]:
             lines.extend(["", _strip_markdown(data["message"])])
         text = "\n".join(lines)

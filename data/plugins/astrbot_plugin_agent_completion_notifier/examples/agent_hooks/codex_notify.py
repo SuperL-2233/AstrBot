@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -35,6 +36,9 @@ def main() -> int:
         "event_id": f"codex:{session_id}:{turn_id}",
         "session_id": session_id,
         "project": Path(cwd).name if cwd else "",
+        "host": os.environ.get(
+            "ASTRBOT_AGENT_NOTIFY_NAME", f"{socket.gethostname()}-Codex"
+        ),
         "message": str(event.get("last-assistant-message") or ""),
     }
     request = urllib.request.Request(

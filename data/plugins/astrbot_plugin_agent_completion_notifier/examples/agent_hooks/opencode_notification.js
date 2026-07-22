@@ -1,4 +1,6 @@
 /** Adapt OpenCode's session.idle event to the AstrBot webhook protocol. */
+import os from "node:os"
+
 export const AgentCompletionQQPlugin = async ({ client, directory }) => {
   return {
     event: async ({ event }) => {
@@ -42,6 +44,7 @@ export const AgentCompletionQQPlugin = async ({ client, directory }) => {
         event_id: `opencode:${sessionID}:${messageID || Date.now()}`,
         session_id: sessionID,
         project: directory,
+        host: process.env.ASTRBOT_AGENT_NOTIFY_NAME || `${os.hostname()}-OpenCode`,
         message,
       }
       try {

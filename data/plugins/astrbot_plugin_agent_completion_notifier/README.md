@@ -40,6 +40,7 @@ AstrBot 会话主动推送到 QQ。它不依赖 CUGB 校园助手插件。
   "event_id": "codex:<thread-id>:<turn-id>",
   "session_id": "<thread-id>",
   "project": "project-name",
+  "host": "<推送标题中的来源名称，可选，缺省显示为 服务器-OpenCode/Codex>",
   "message": "本轮最终回复"
 }
 ```
