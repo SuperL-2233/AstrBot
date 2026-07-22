@@ -1,11 +1,43 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ..repositories.notification_repo import NotificationRepository
+
+
+def _strip_markdown(text: str) -> str:
+    """Convert common Markdown syntax to plain text for QQ rendering.
+
+    QQ cannot render Markdown, so fenced code blocks, emphasis markers,
+    links, images, headings, quotes, and inline code are flattened while
+    keeping their textual content.
+
+    Args:
+        text: Raw message text that may contain Markdown.
+
+    Returns:
+        Plain text with Markdown markers removed.
+    """
+    # Fenced code blocks: drop fence lines, keep the code content.
+    text = re.sub(r"```[^\n]*\n(.*?)```", r"\1", text, flags=re.S)
+    text = re.sub(r"```[^\n]*$", "", text)
+    # Images keep their alt text; links keep their link text.
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    # Inline code, bold, italic, and strikethrough keep their content.
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: m.group(1) or m.group(2), text)
+    text = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"\1", text)
+    text = re.sub(r"(?<![\w_])_([^_\n]+)_(?![\w_])", r"\1", text)
+    text = re.sub(r"~~(.+?)~~", r"\1", text)
+    # Headings and blockquotes drop their leading markers.
+    text = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]*", "", text, flags=re.M)
+    text = re.sub(r"^[ \t]*>[ \t]?", "", text, flags=re.M)
+    # Collapse 3+ consecutive blank lines left behind by the removals.
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 @dataclass(frozen=True)
@@ -24,7 +56,9 @@ class NotificationService:
         "opencode": "session.idle",
     }
 
-    def __init__(self, config: dict[str, Any], repository: NotificationRepository) -> None:
+    def __init__(
+        self, config: dict[str, Any], repository: NotificationRepository
+    ) -> None:
         self.config = config
         self.repository = repository
 
@@ -85,10 +119,14 @@ class NotificationService:
 
     def _validate(self, payload: Any) -> dict[str, str]:
         if not isinstance(payload, dict):
-            raise NotificationRequestError("请求体必须是 JSON 对象。", "INVALID_JSON_BODY")
+            raise NotificationRequestError(
+                "请求体必须是 JSON 对象。", "INVALID_JSON_BODY"
+            )
 
         source = self._field(payload, "source", 32).lower()
-        allowed_sources = {str(item).lower() for item in self.config.get("allowed_sources", [])}
+        allowed_sources = {
+            str(item).lower() for item in self.config.get("allowed_sources", [])
+        }
         if source not in self.EVENT_BY_SOURCE or source not in allowed_sources:
             raise NotificationRequestError("不支持的通知来源。", "UNSUPPORTED_SOURCE")
 
@@ -109,7 +147,9 @@ class NotificationService:
     def _field(payload: dict[str, Any], name: str, max_length: int) -> str:
         raw_value = payload.get(name)
         if not isinstance(raw_value, str):
-            raise NotificationRequestError(f"字段必须是字符串：{name}。", "INVALID_FIELD_TYPE")
+            raise NotificationRequestError(
+                f"字段必须是字符串：{name}。", "INVALID_FIELD_TYPE"
+            )
         value = raw_value.strip()
         if not value:
             raise NotificationRequestError(f"缺少字段：{name}。", "MISSING_FIELD")
@@ -123,7 +163,9 @@ class NotificationService:
         if raw_value is None:
             return ""
         if not isinstance(raw_value, str):
-            raise NotificationRequestError(f"字段必须是字符串：{name}。", "INVALID_FIELD_TYPE")
+            raise NotificationRequestError(
+                f"字段必须是字符串：{name}。", "INVALID_FIELD_TYPE"
+            )
         value = raw_value.strip()
         if len(value) > max_length:
             raise NotificationRequestError(f"字段过长：{name}。", "FIELD_TOO_LONG")
@@ -131,12 +173,9 @@ class NotificationService:
 
     def _format_message(self, data: dict[str, str]) -> str:
         source_name = "Codex" if data["source"] == "codex" else "OpenCode"
-        lines = [f"[{source_name}] 一轮对话已结束"]
-        if data["project"]:
-            lines.append(f"项目：{Path(data['project']).name}")
-        lines.append(f"会话：{data['session_id']}")
+        lines = [f"服务器-{source_name} 会话结束", f"会话：{data['session_id']}"]
         if data["message"]:
-            lines.extend(["", data["message"]])
+            lines.extend(["", _strip_markdown(data["message"])])
         text = "\n".join(lines)
         limit = max(100, int(self.config.get("max_message_chars", 1500)))
         if len(text) > limit:
