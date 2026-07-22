@@ -10,7 +10,10 @@ class ChaoxingService:
 
     async def get_pending_homework(self, course_name: str = "") -> dict:
         chaoxing_cfg = self.config["chaoxing"]
-        if not chaoxing_cfg.get("enable", False) or chaoxing_cfg.get("provider") == "disabled":
+        if (
+            not chaoxing_cfg.get("enable", False)
+            or chaoxing_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=[],
@@ -24,7 +27,10 @@ class ChaoxingService:
 
     async def get_recent_deadlines(self, within_days: int = 7) -> dict:
         chaoxing_cfg = self.config["chaoxing"]
-        if not chaoxing_cfg.get("enable", False) or chaoxing_cfg.get("provider") == "disabled":
+        if (
+            not chaoxing_cfg.get("enable", False)
+            or chaoxing_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=[],
@@ -38,7 +44,10 @@ class ChaoxingService:
 
     async def refresh(self) -> dict:
         chaoxing_cfg = self.config["chaoxing"]
-        if not chaoxing_cfg.get("enable", False) or chaoxing_cfg.get("provider") == "disabled":
+        if (
+            not chaoxing_cfg.get("enable", False)
+            or chaoxing_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=None,
@@ -52,7 +61,10 @@ class ChaoxingService:
 
     async def get_status(self) -> dict:
         chaoxing_cfg = self.config["chaoxing"]
-        if not chaoxing_cfg.get("enable", False) or chaoxing_cfg.get("provider") == "disabled":
+        if (
+            not chaoxing_cfg.get("enable", False)
+            or chaoxing_cfg.get("provider") == "disabled"
+        ):
             return {
                 "enabled": False,
                 "provider": "disabled",

@@ -15,7 +15,9 @@ class ClassroomMportalProvider:
         self.repo = repo
         self.config = config
         classroom_cfg = config["classroom"]
-        self.base_url = classroom_cfg.get("mportal_base_url", "https://mportal.cugb.edu.cn").rstrip("/")
+        self.base_url = classroom_cfg.get(
+            "mportal_base_url", "https://mportal.cugb.edu.cn"
+        ).rstrip("/")
         self.campus_id = str(classroom_cfg.get("mportal_campus_id", "1"))
         self.page_size = int(classroom_cfg.get("mportal_page_size", 50))
         self.max_pages = int(classroom_cfg.get("mportal_max_pages", 10))
@@ -87,11 +89,17 @@ class ClassroomMportalProvider:
     ) -> dict:
         try:
             metadata = await self._get_cached_metadata(target_date)
-            building_name = self._resolve_building_name(building, metadata.get("buildings", []))
-            section_ids = self._resolve_section_ids(metadata.get("sections", []), start_time, end_time)
+            building_name = self._resolve_building_name(
+                building, metadata.get("buildings", [])
+            )
+            section_ids = self._resolve_section_ids(
+                metadata.get("sections", []), start_time, end_time
+            )
             if self._should_refresh(target_date):
                 await self._refresh_cache(target_date, metadata=metadata)
-            cached_rooms = self.repo.query_cache(target_date.isoformat(), building=building_name)
+            cached_rooms = self.repo.query_cache(
+                target_date.isoformat(), building=building_name
+            )
             rows = self._normalize_cached_rooms(
                 cached_rooms,
                 start_dt=datetime.combine(target_date, start_time),
@@ -123,10 +131,9 @@ class ClassroomMportalProvider:
         )
 
     def _should_refresh(self, target_date: date) -> bool:
-        return (
-            not self.repo.has_cache(target_date.isoformat())
-            or self.repo.is_cache_expired(self.cache_expire_minutes)
-        )
+        return not self.repo.has_cache(
+            target_date.isoformat()
+        ) or self.repo.is_cache_expired(self.cache_expire_minutes)
 
     async def _get_cached_metadata(self, target_date: date) -> dict[str, Any]:
         metadata = self.repo.get_metadata("mportal_index")
@@ -140,7 +147,9 @@ class ClassroomMportalProvider:
         )
         return metadata
 
-    async def _refresh_cache(self, target_date: date, metadata: dict[str, Any] | None = None) -> int:
+    async def _refresh_cache(
+        self, target_date: date, metadata: dict[str, Any] | None = None
+    ) -> int:
         metadata = metadata or await self._fetch_index()
         update_time = format_datetime(now_local().replace(second=0, microsecond=0))
         self.repo.set_metadata("mportal_index", metadata, update_time)
@@ -154,7 +163,11 @@ class ClassroomMportalProvider:
                     jc="",
                 )
             )
-        cache_rows = [row for row in (self._to_cache_row(item) for item in raw_rooms) if row["building"] and row["room"]]
+        cache_rows = [
+            row
+            for row in (self._to_cache_row(item) for item in raw_rooms)
+            if row["building"] and row["room"]
+        ]
         return self.repo.replace_cache(target_date.isoformat(), cache_rows, update_time)
 
     async def _fetch_index(self) -> dict[str, Any]:
@@ -182,7 +195,9 @@ class ClassroomMportalProvider:
             if str(item.get("jxlm") or item.get("name") or item.get("id") or "").strip()
         ]
 
-    async def _fetch_search(self, building: str, target_date: str, jc: str) -> list[dict[str, Any]]:
+    async def _fetch_search(
+        self, building: str, target_date: str, jc: str
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for page in range(1, self.max_pages + 1):
             payload = await self._post_json(
@@ -239,7 +254,10 @@ class ClassroomMportalProvider:
         keyword = building.strip()
         if not keyword:
             return ""
-        names = [str(item.get("jxlm") or item.get("name") or item.get("text") or "").strip() for item in buildings]
+        names = [
+            str(item.get("jxlm") or item.get("name") or item.get("text") or "").strip()
+            for item in buildings
+        ]
         if keyword in names:
             return keyword
         aliases = {
@@ -266,7 +284,10 @@ class ClassroomMportalProvider:
     ) -> list[str]:
         normalized = [
             item
-            for item in (cls._normalize_section(item) for item in cls._iter_section_items(sections))
+            for item in (
+                cls._normalize_section(item)
+                for item in cls._iter_section_items(sections)
+            )
             if item
         ]
         if not normalized:
@@ -274,7 +295,9 @@ class ClassroomMportalProvider:
         matched = [
             item["id"]
             for item in normalized
-            if cls._time_ranges_overlap(start_time, end_time, item["start"], item["end"])
+            if cls._time_ranges_overlap(
+                start_time, end_time, item["start"], item["end"]
+            )
         ]
         return matched
 
@@ -302,7 +325,9 @@ class ClassroomMportalProvider:
 
     @staticmethod
     def _normalize_section(item: dict[str, Any]) -> dict[str, Any] | None:
-        section_id = item.get("jc") or item.get("id") or item.get("value") or item.get("name")
+        section_id = (
+            item.get("jc") or item.get("id") or item.get("value") or item.get("name")
+        )
         start_raw = item.get("start") or item.get("start_time") or item.get("kssj")
         end_raw = item.get("end") or item.get("end_time") or item.get("jssj")
         if not start_raw or not end_raw:
@@ -384,7 +409,10 @@ class ClassroomMportalProvider:
             "building": str(item.get("jxlm") or "").strip(),
             "room": str(item.get("jsm") or item.get("jsh") or "").strip(),
             "capacity": cls._parse_capacity(item.get("jsrl")),
-            "occupied_sections": sorted(cls._occupied_sections(item), key=lambda value: int(value) if value.isdigit() else value),
+            "occupied_sections": sorted(
+                cls._occupied_sections(item),
+                key=lambda value: int(value) if value.isdigit() else value,
+            ),
             "source": "mportal",
             "raw_data": item,
         }
@@ -393,13 +421,19 @@ class ClassroomMportalProvider:
     def _is_free(cls, item: dict[str, Any], required_sections: list[str]) -> bool:
         occupied = cls._occupied_sections(item)
         if required_sections:
-            return not set(required_sections).intersection(occupied) and cls._section_details_free(
+            return not set(required_sections).intersection(
+                occupied
+            ) and cls._section_details_free(
                 item,
                 required_sections,
             )
         occupied_details = item.get("zyxx") or []
         if isinstance(occupied_details, list):
-            return all(not str(detail.get("name") or "").strip() for detail in occupied_details if isinstance(detail, dict))
+            return all(
+                not str(detail.get("name") or "").strip()
+                for detail in occupied_details
+                if isinstance(detail, dict)
+            )
         if isinstance(occupied_details, dict):
             details = occupied_details.values()
             if required_sections:
@@ -408,11 +442,17 @@ class ClassroomMportalProvider:
                     for section_id, detail in occupied_details.items()
                     if str(section_id) in set(required_sections)
                 ]
-            return all(not str(detail.get("name") or "").strip() for detail in details if isinstance(detail, dict))
+            return all(
+                not str(detail.get("name") or "").strip()
+                for detail in details
+                if isinstance(detail, dict)
+            )
         return not occupied
 
     @staticmethod
-    def _section_details_free(item: dict[str, Any], required_sections: list[str]) -> bool:
+    def _section_details_free(
+        item: dict[str, Any], required_sections: list[str]
+    ) -> bool:
         occupied_details = item.get("zyxx") or {}
         if isinstance(occupied_details, dict):
             details = [
@@ -420,9 +460,17 @@ class ClassroomMportalProvider:
                 for section_id, detail in occupied_details.items()
                 if str(section_id) in set(required_sections)
             ]
-            return all(not str(detail.get("name") or "").strip() for detail in details if isinstance(detail, dict))
+            return all(
+                not str(detail.get("name") or "").strip()
+                for detail in details
+                if isinstance(detail, dict)
+            )
         if isinstance(occupied_details, list):
-            return all(not str(detail.get("name") or "").strip() for detail in occupied_details if isinstance(detail, dict))
+            return all(
+                not str(detail.get("name") or "").strip()
+                for detail in occupied_details
+                if isinstance(detail, dict)
+            )
         return True
 
     @staticmethod

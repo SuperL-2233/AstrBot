@@ -4,7 +4,6 @@ from pathlib import Path
 
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-
 PLUGIN_NAME = "astrbot_plugin_agent_completion_notifier"
 
 

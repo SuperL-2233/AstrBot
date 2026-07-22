@@ -21,7 +21,9 @@ def main() -> int:
     url = os.environ.get("ASTRBOT_AGENT_WEBHOOK_URL", "").strip()
     token = os.environ.get("ASTRBOT_AGENT_WEBHOOK_TOKEN", "").strip()
     if not url or not token:
-        print("Codex QQ notifier: webhook URL or token is not configured", file=sys.stderr)
+        print(
+            "Codex QQ notifier: webhook URL or token is not configured", file=sys.stderr
+        )
         return 0
 
     session_id = str(event.get("thread-id") or event.get("session_id") or "unknown")

@@ -34,7 +34,9 @@ class AgentCompletionNotifierPlugin(star.Star):
                     f"{self.config['host']}:{self.config['port']}{self.config['path']}"
                 )
             else:
-                logger.info(f"开发工具通知接收器未启动: {self.webhook_provider.disabled_reason}")
+                logger.info(
+                    f"开发工具通知接收器未启动: {self.webhook_provider.disabled_reason}"
+                )
         except Exception as exc:
             self.webhook_provider.disabled_reason = "启动失败"
             logger.error(f"开发工具通知接收器启动失败: {exc}")
@@ -44,7 +46,9 @@ class AgentCompletionNotifierPlugin(star.Star):
 
     async def _deliver_notification(self, payload: object) -> dict:
         async def send(target_umo: str, text: str) -> bool:
-            return await self.context.send_message(target_umo, MessageChain().message(text))
+            return await self.context.send_message(
+                target_umo, MessageChain().message(text)
+            )
 
         return await self.notification_service.deliver(payload, send)
 
@@ -52,10 +56,7 @@ class AgentCompletionNotifierPlugin(star.Star):
     async def help_command(self, event: AstrMessageEvent):
         """显示开发工具通知插件帮助。"""
         yield event.plain_result(
-            "开发工具结束通知\n"
-            "/开发通知状态\n"
-            "/开发通知绑定\n"
-            "/开发通知解绑"
+            "开发工具结束通知\n/开发通知状态\n/开发通知绑定\n/开发通知解绑"
         )
 
     @filter.command("开发通知状态")

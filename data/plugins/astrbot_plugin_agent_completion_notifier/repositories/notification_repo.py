@@ -55,7 +55,9 @@ class NotificationRepository:
 
     def clear_target_umo(self) -> None:
         with self._connect() as connection:
-            connection.execute("DELETE FROM notification_settings WHERE key = 'target_umo'")
+            connection.execute(
+                "DELETE FROM notification_settings WHERE key = 'target_umo'"
+            )
 
     def claim_event(self, event_id: str, source: str) -> bool:
         with self._connect() as connection:

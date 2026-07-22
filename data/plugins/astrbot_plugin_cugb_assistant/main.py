@@ -8,7 +8,10 @@ from astrbot.api import llm_tool, logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .formatters.classroom_formatter import format_classroom_list, format_recommendations
+from .formatters.classroom_formatter import (
+    format_classroom_list,
+    format_recommendations,
+)
 from .formatters.course_formatter import format_course_list, format_single_course
 from .formatters.homework_formatter import format_homework_list
 from .formatters.status_formatter import format_status
@@ -26,7 +29,10 @@ from .services.distance_service import DistanceService
 from .services.reminder_service import ReminderService
 from .utils.config_loader import load_plugin_config
 from .utils.paths import resolve_data_path
-from .utils.permission_utils import ensure_general_access, ensure_personal_schedule_access
+from .utils.permission_utils import (
+    ensure_general_access,
+    ensure_personal_schedule_access,
+)
 from .utils.time_utils import combine_date_time, today_local
 
 
@@ -42,11 +48,19 @@ class CugbAssistantPlugin(star.Star):
         self.config = load_plugin_config(config)
         self._classroom_refresh_task: asyncio.Task | None = None
 
-        course_repo = CourseRepository(resolve_data_path(self.config["course"]["database"]))
-        classroom_repo = ClassroomRepository(resolve_data_path(self.config["classroom"]["database"]))
-        homework_repo = HomeworkRepository(resolve_data_path(self.config["chaoxing"]["database"]))
+        course_repo = CourseRepository(
+            resolve_data_path(self.config["course"]["database"])
+        )
+        classroom_repo = ClassroomRepository(
+            resolve_data_path(self.config["classroom"]["database"])
+        )
+        homework_repo = HomeworkRepository(
+            resolve_data_path(self.config["chaoxing"]["database"])
+        )
 
-        importer = TimetableImporter(resolve_data_path(self.config["course"]["timetable_file"]))
+        importer = TimetableImporter(
+            resolve_data_path(self.config["course"]["timetable_file"])
+        )
         self.course_service = CourseService(course_repo, importer)
 
         classroom_provider_name = self.config["classroom"]["provider"]
@@ -68,8 +82,13 @@ class CugbAssistantPlugin(star.Star):
     async def initialize(self) -> None:
         logger.info("astrbot_plugin_cugb_assistant initialized")
         classroom_cfg = self.config["classroom"]
-        if classroom_cfg.get("enabled", True) and classroom_cfg.get("provider") == "mportal":
-            self._classroom_refresh_task = asyncio.create_task(self._run_classroom_refresh_loop())
+        if (
+            classroom_cfg.get("enabled", True)
+            and classroom_cfg.get("provider") == "mportal"
+        ):
+            self._classroom_refresh_task = asyncio.create_task(
+                self._run_classroom_refresh_loop()
+            )
 
     async def terminate(self) -> None:
         if self._classroom_refresh_task:
@@ -78,7 +97,10 @@ class CugbAssistantPlugin(star.Star):
                 await self._classroom_refresh_task
 
     async def _run_classroom_refresh_loop(self) -> None:
-        interval_seconds = max(1, int(self.config["classroom"].get("update_interval_minutes", 120))) * 60
+        interval_seconds = (
+            max(1, int(self.config["classroom"].get("update_interval_minutes", 120)))
+            * 60
+        )
         while True:
             try:
                 result = await self.classroom_service.refresh()
@@ -158,7 +180,9 @@ class CugbAssistantPlugin(star.Star):
         if access_error:
             yield event.plain_result(access_error)
             return
-        yield event.plain_result(format_course_list(self.course_service.get_today_courses(), "今天课表"))
+        yield event.plain_result(
+            format_course_list(self.course_service.get_today_courses(), "今天课表")
+        )
 
     @filter.command("明天课表")
     async def tomorrow_courses(self, event: AstrMessageEvent):
@@ -167,7 +191,9 @@ class CugbAssistantPlugin(star.Star):
         if access_error:
             yield event.plain_result(access_error)
             return
-        yield event.plain_result(format_course_list(self.course_service.get_tomorrow_courses(), "明天课表"))
+        yield event.plain_result(
+            format_course_list(self.course_service.get_tomorrow_courses(), "明天课表")
+        )
 
     @filter.command("下节课")
     async def next_course(self, event: AstrMessageEvent):
@@ -176,7 +202,9 @@ class CugbAssistantPlugin(star.Star):
         if access_error:
             yield event.plain_result(access_error)
             return
-        yield event.plain_result(format_single_course(self.course_service.get_next_course(), "下一节课"))
+        yield event.plain_result(
+            format_single_course(self.course_service.get_next_course(), "下一节课")
+        )
 
     @filter.command("当前课程")
     async def current_course(self, event: AstrMessageEvent):
@@ -185,10 +213,14 @@ class CugbAssistantPlugin(star.Star):
         if access_error:
             yield event.plain_result(access_error)
             return
-        yield event.plain_result(format_single_course(self.course_service.get_current_course(), "当前课程"))
+        yield event.plain_result(
+            format_single_course(self.course_service.get_current_course(), "当前课程")
+        )
 
     @filter.command("课程")
-    async def course_command(self, event: AstrMessageEvent, action: str, keyword: GreedyStr = ""):
+    async def course_command(
+        self, event: AstrMessageEvent, action: str, keyword: GreedyStr = ""
+    ):
         """课程辅助命令。"""
         access_error = self._schedule_access_error(event)
         if access_error:
@@ -203,7 +235,9 @@ class CugbAssistantPlugin(star.Star):
                 return
             lines = ["课程周次"]
             for row in result["data"]:
-                lines.append(f"{row['course_name']} | 周次: {row.get('weeks') or '未填写'} | 地点: {row['location']}")
+                lines.append(
+                    f"{row['course_name']} | 周次: {row.get('weeks') or '未填写'} | 地点: {row['location']}"
+                )
             yield event.plain_result("\n".join(lines))
             return
         if action == "搜索":
@@ -213,7 +247,13 @@ class CugbAssistantPlugin(star.Star):
         yield event.plain_result("用法：/课程 周数 <课程名> 或 /课程 搜索 <关键词>")
 
     @filter.command("空教室")
-    async def empty_classroom(self, event: AstrMessageEvent, building: str = "", start_time: str = "", end_time: str = ""):
+    async def empty_classroom(
+        self,
+        event: AstrMessageEvent,
+        building: str = "",
+        start_time: str = "",
+        end_time: str = "",
+    ):
         """查询空教室。"""
         access_error = self._general_access_error(event)
         if access_error:
@@ -221,10 +261,16 @@ class CugbAssistantPlugin(star.Star):
             return
         if start_time and end_time:
             try:
-                start = combine_date_time(today_local(), start_time).strftime("%Y-%m-%d %H:%M")
-                end = combine_date_time(today_local(), end_time).strftime("%Y-%m-%d %H:%M")
+                start = combine_date_time(today_local(), start_time).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                end = combine_date_time(today_local(), end_time).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
             except ValueError:
-                yield event.plain_result("时间格式无法识别，请使用 HH:MM，例如 /空教室 教三 14:00 16:00")
+                yield event.plain_result(
+                    "时间格式无法识别，请使用 HH:MM，例如 /空教室 教三 14:00 16:00"
+                )
                 return
             result = await self.classroom_service.get_empty_classrooms_by_time(
                 building=building,
@@ -232,7 +278,9 @@ class CugbAssistantPlugin(star.Star):
                 end_time=end,
             )
         else:
-            result = await self.classroom_service.get_empty_classrooms_now(building=building)
+            result = await self.classroom_service.get_empty_classrooms_now(
+                building=building
+            )
         yield event.plain_result(format_classroom_list(result, "空教室查询结果"))
 
     @filter.command("空教室刷新")
@@ -246,7 +294,9 @@ class CugbAssistantPlugin(star.Star):
         yield event.plain_result(result["message"])
 
     @filter.command("自习推荐")
-    async def study_recommendation(self, event: AstrMessageEvent, start_time: str = "", end_time: str = ""):
+    async def study_recommendation(
+        self, event: AstrMessageEvent, start_time: str = "", end_time: str = ""
+    ):
         """根据当前时间和下一节课推荐自习教室。"""
         access_error = self._general_access_error(event)
         if access_error:
@@ -254,20 +304,34 @@ class CugbAssistantPlugin(star.Star):
             return
         if start_time and end_time:
             try:
-                start = combine_date_time(today_local(), start_time).strftime("%Y-%m-%d %H:%M")
-                end = combine_date_time(today_local(), end_time).strftime("%Y-%m-%d %H:%M")
+                start = combine_date_time(today_local(), start_time).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                end = combine_date_time(today_local(), end_time).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
             except ValueError:
-                yield event.plain_result("时间格式无法识别，请使用 HH:MM，例如 /自习推荐 13:00 15:30")
+                yield event.plain_result(
+                    "时间格式无法识别，请使用 HH:MM，例如 /自习推荐 13:00 15:30"
+                )
                 return
-            classroom_result = await self.classroom_service.get_empty_classrooms_by_time(start_time=start, end_time=end)
+            classroom_result = (
+                await self.classroom_service.get_empty_classrooms_by_time(
+                    start_time=start, end_time=end
+                )
+            )
         else:
             classroom_result = await self.classroom_service.get_empty_classrooms_now()
         if not classroom_result["success"]:
             yield event.plain_result(classroom_result["message"])
             return
         next_course = self.course_service.get_next_course()
-        next_location = next_course["data"]["location"] if next_course["success"] else ""
-        ranked = self.distance_service.recommend(classroom_result["data"], next_course_location=next_location)
+        next_location = (
+            next_course["data"]["location"] if next_course["success"] else ""
+        )
+        ranked = self.distance_service.recommend(
+            classroom_result["data"], next_course_location=next_location
+        )
         yield event.plain_result(format_recommendations(ranked))
 
     @filter.command("作业")
@@ -325,7 +389,9 @@ class CugbAssistantPlugin(star.Star):
 
         Args:
         """
-        return json.dumps(self.course_service.get_tomorrow_courses(), ensure_ascii=False)
+        return json.dumps(
+            self.course_service.get_tomorrow_courses(), ensure_ascii=False
+        )
 
     @llm_tool("get_next_course")
     async def tool_get_next_course(self, _context) -> str:
@@ -350,7 +416,9 @@ class CugbAssistantPlugin(star.Star):
         Args:
             course_name(string): 课程名称或关键词
         """
-        return json.dumps(self.course_service.get_course_weeks(course_name), ensure_ascii=False)
+        return json.dumps(
+            self.course_service.get_course_weeks(course_name), ensure_ascii=False
+        )
 
     @llm_tool("get_empty_classrooms_now")
     async def tool_get_empty_classrooms_now(self, _context, building: str = "") -> str:
@@ -359,10 +427,15 @@ class CugbAssistantPlugin(star.Star):
         Args:
             building(string): 可选，教学楼名称
         """
-        return json.dumps(await self.classroom_service.get_empty_classrooms_now(building), ensure_ascii=False)
+        return json.dumps(
+            await self.classroom_service.get_empty_classrooms_now(building),
+            ensure_ascii=False,
+        )
 
     @llm_tool("get_empty_classrooms_by_time")
-    async def tool_get_empty_classrooms_by_time(self, _context, building: str = "", start_time: str = "", end_time: str = "") -> str:
+    async def tool_get_empty_classrooms_by_time(
+        self, _context, building: str = "", start_time: str = "", end_time: str = ""
+    ) -> str:
         """查询指定时间段空教室。
 
         Args:
@@ -371,11 +444,17 @@ class CugbAssistantPlugin(star.Star):
             end_time(string): 结束时间，格式 HH:MM 或 YYYY-MM-DD HH:MM
         """
         if start_time and len(start_time) == 5:
-            start_time = combine_date_time(today_local(), start_time).strftime("%Y-%m-%d %H:%M")
+            start_time = combine_date_time(today_local(), start_time).strftime(
+                "%Y-%m-%d %H:%M"
+            )
         if end_time and len(end_time) == 5:
-            end_time = combine_date_time(today_local(), end_time).strftime("%Y-%m-%d %H:%M")
+            end_time = combine_date_time(today_local(), end_time).strftime(
+                "%Y-%m-%d %H:%M"
+            )
         return json.dumps(
-            await self.classroom_service.get_empty_classrooms_by_time(building, start_time, end_time),
+            await self.classroom_service.get_empty_classrooms_by_time(
+                building, start_time, end_time
+            ),
             ensure_ascii=False,
         )
 
@@ -398,20 +477,33 @@ class CugbAssistantPlugin(star.Star):
         """
         _ = current_location
         if start_time and len(start_time) == 5:
-            start_time = combine_date_time(today_local(), start_time).strftime("%Y-%m-%d %H:%M")
+            start_time = combine_date_time(today_local(), start_time).strftime(
+                "%Y-%m-%d %H:%M"
+            )
         if end_time and len(end_time) == 5:
-            end_time = combine_date_time(today_local(), end_time).strftime("%Y-%m-%d %H:%M")
+            end_time = combine_date_time(today_local(), end_time).strftime(
+                "%Y-%m-%d %H:%M"
+            )
         result = (
-            await self.classroom_service.get_empty_classrooms_by_time(start_time=start_time, end_time=end_time)
+            await self.classroom_service.get_empty_classrooms_by_time(
+                start_time=start_time, end_time=end_time
+            )
             if start_time and end_time
             else await self.classroom_service.get_empty_classrooms_now()
         )
         rows = result["data"] if result["success"] else []
         if not next_course_location:
             next_course = self.course_service.get_next_course()
-            next_course_location = next_course["data"]["location"] if next_course["success"] else ""
-        data = self.distance_service.recommend(rows, next_course_location=next_course_location)
-        return json.dumps({"success": True, "data": data, "message": "已返回推荐结果。"}, ensure_ascii=False)
+            next_course_location = (
+                next_course["data"]["location"] if next_course["success"] else ""
+            )
+        data = self.distance_service.recommend(
+            rows, next_course_location=next_course_location
+        )
+        return json.dumps(
+            {"success": True, "data": data, "message": "已返回推荐结果。"},
+            ensure_ascii=False,
+        )
 
     @llm_tool("get_pending_homework")
     async def tool_get_pending_homework(self, _context, course_name: str = "") -> str:
@@ -420,7 +512,10 @@ class CugbAssistantPlugin(star.Star):
         Args:
             course_name(string): 可选，课程名
         """
-        return json.dumps(await self.chaoxing_service.get_pending_homework(course_name), ensure_ascii=False)
+        return json.dumps(
+            await self.chaoxing_service.get_pending_homework(course_name),
+            ensure_ascii=False,
+        )
 
     @llm_tool("get_recent_deadlines")
     async def tool_get_recent_deadlines(self, _context, within_days: int = 7) -> str:
@@ -429,7 +524,10 @@ class CugbAssistantPlugin(star.Star):
         Args:
             within_days(number): 可选，默认 7 天
         """
-        return json.dumps(await self.chaoxing_service.get_recent_deadlines(within_days), ensure_ascii=False)
+        return json.dumps(
+            await self.chaoxing_service.get_recent_deadlines(within_days),
+            ensure_ascii=False,
+        )
 
     @llm_tool("get_plugin_status")
     async def tool_get_plugin_status(self, _context) -> str:

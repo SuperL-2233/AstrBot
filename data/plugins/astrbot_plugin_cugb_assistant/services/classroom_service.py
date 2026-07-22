@@ -10,13 +10,20 @@ class ClassroomService:
 
     async def get_empty_classrooms_now(self, building: str = "") -> dict:
         classroom_cfg = self.config["classroom"]
-        if not classroom_cfg.get("enabled", True) or classroom_cfg.get("provider") == "disabled":
+        if (
+            not classroom_cfg.get("enabled", True)
+            or classroom_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=[],
                 message="空教室数据源尚未配置，当前无法查询真实空教室。",
                 error_code="CLASSROOM_SOURCE_NOT_CONFIGURED",
-                source_status={"enabled": False, "provider": "disabled", "last_update_time": None},
+                source_status={
+                    "enabled": False,
+                    "provider": "disabled",
+                    "last_update_time": None,
+                },
             )
         if self.provider is None:
             return self._unsupported_provider_result()
@@ -29,13 +36,20 @@ class ClassroomService:
         end_time: str = "",
     ) -> dict:
         classroom_cfg = self.config["classroom"]
-        if not classroom_cfg.get("enabled", True) or classroom_cfg.get("provider") == "disabled":
+        if (
+            not classroom_cfg.get("enabled", True)
+            or classroom_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=[],
                 message="空教室数据源尚未配置，当前无法查询真实空教室。",
                 error_code="CLASSROOM_SOURCE_NOT_CONFIGURED",
-                source_status={"enabled": False, "provider": "disabled", "last_update_time": None},
+                source_status={
+                    "enabled": False,
+                    "provider": "disabled",
+                    "last_update_time": None,
+                },
             )
         if self.provider is None:
             return self._unsupported_provider_result()
@@ -47,13 +61,20 @@ class ClassroomService:
 
     async def refresh(self) -> dict:
         classroom_cfg = self.config["classroom"]
-        if not classroom_cfg.get("enabled", True) or classroom_cfg.get("provider") == "disabled":
+        if (
+            not classroom_cfg.get("enabled", True)
+            or classroom_cfg.get("provider") == "disabled"
+        ):
             return make_result(
                 False,
                 data=None,
                 message="空教室数据源尚未配置，当前无法刷新。",
                 error_code="CLASSROOM_SOURCE_NOT_CONFIGURED",
-                source_status={"enabled": False, "provider": "disabled", "last_update_time": None},
+                source_status={
+                    "enabled": False,
+                    "provider": "disabled",
+                    "last_update_time": None,
+                },
             )
         if self.provider is None:
             return self._unsupported_provider_result()
@@ -61,7 +82,10 @@ class ClassroomService:
 
     async def get_status(self) -> dict:
         classroom_cfg = self.config["classroom"]
-        if not classroom_cfg.get("enabled", True) or classroom_cfg.get("provider") == "disabled":
+        if (
+            not classroom_cfg.get("enabled", True)
+            or classroom_cfg.get("provider") == "disabled"
+        ):
             return {
                 "enabled": False,
                 "provider": "disabled",

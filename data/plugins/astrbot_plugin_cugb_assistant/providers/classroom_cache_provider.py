@@ -47,7 +47,9 @@ class ClassroomCacheProvider:
         start_time: str = "",
         end_time: str = "",
     ) -> dict:
-        cache_date = start_time[:10] if start_time else datetime.now().date().isoformat()
+        cache_date = (
+            start_time[:10] if start_time else datetime.now().date().isoformat()
+        )
         rows = self._format_cached_rows(
             self.repo.query_cache(cache_date, building=building),
             start_time,
@@ -77,7 +79,9 @@ class ClassroomCacheProvider:
         }
 
     @staticmethod
-    def _format_cached_rows(rows: list[dict], start_time: str, end_time: str) -> list[dict]:
+    def _format_cached_rows(
+        rows: list[dict], start_time: str, end_time: str
+    ) -> list[dict]:
         return [
             {
                 "building": item["building"],

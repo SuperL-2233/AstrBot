@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-
 DEFAULT_CONFIG: dict[str, Any] = {
     "owner_qq_id": "",
     "enabled": False,

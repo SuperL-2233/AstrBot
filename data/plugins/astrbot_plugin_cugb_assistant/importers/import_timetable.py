@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ..utils.result import make_result
 
-
 HEADER_MAPPING = {
     "course_name": "course_name",
     "课程名": "course_name",
@@ -68,7 +67,9 @@ class TimetableImporter:
                 error_code="TIMETABLE_EMPTY",
             )
 
-        raw_headers = [str(item).strip() if item is not None else "" for item in rows[0]]
+        raw_headers = [
+            str(item).strip() if item is not None else "" for item in rows[0]
+        ]
         mapped_headers = [HEADER_MAPPING.get(header, "") for header in raw_headers]
         if not REQUIRED_HEADERS.issubset(set(mapped_headers)):
             return make_result(
@@ -96,7 +97,9 @@ class TimetableImporter:
                     "location": row_dict["location"],
                     "teacher": row_dict.get("teacher"),
                     "weeks": row_dict.get("weeks"),
-                    "weekday": int(row_dict["weekday"]) if row_dict.get("weekday", "").isdigit() else None,
+                    "weekday": int(row_dict["weekday"])
+                    if row_dict.get("weekday", "").isdigit()
+                    else None,
                     "source": "local_timetable",
                     "raw_data": str(row_dict),
                 }
@@ -110,4 +113,6 @@ class TimetableImporter:
                 error_code="TIMETABLE_NO_ROWS",
             )
 
-        return make_result(True, data=courses, message=f"已解析 {len(courses)} 条课程。")
+        return make_result(
+            True, data=courses, message=f"已解析 {len(courses)} 条课程。"
+        )

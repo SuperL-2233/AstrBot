@@ -85,7 +85,9 @@ class ClassroomRepository:
             conn.commit()
         return len(classrooms)
 
-    def query(self, building: str = "", start_time: str = "", end_time: str = "") -> list[dict]:
+    def query(
+        self, building: str = "", start_time: str = "", end_time: str = ""
+    ) -> list[dict]:
         sql = "SELECT * FROM classrooms WHERE 1=1"
         params: list[str] = []
         if building:
@@ -119,12 +121,18 @@ class ClassroomRepository:
 
     def count(self) -> int:
         with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS count FROM classroom_cache").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM classroom_cache"
+            ).fetchone()
         return int(row["count"])
 
-    def replace_cache(self, cache_date: str, classrooms: list[dict], source_update_time: str) -> int:
+    def replace_cache(
+        self, cache_date: str, classrooms: list[dict], source_update_time: str
+    ) -> int:
         with self._connect() as conn:
-            conn.execute("DELETE FROM classroom_cache WHERE cache_date = ?", (cache_date,))
+            conn.execute(
+                "DELETE FROM classroom_cache WHERE cache_date = ?", (cache_date,)
+            )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO classroom_cache (

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
-
 DATETIME_FORMAT = "%Y-%m-%d %H:%M"
 TIME_FORMAT = "%H:%M"
 

@@ -14,7 +14,10 @@ def format_course_list(result: dict, title: str) -> str:
     if not result["success"]:
         return result["message"]
     lines = [title]
-    lines.extend(f"{index}. {format_course(course)}" for index, course in enumerate(result["data"], start=1))
+    lines.extend(
+        f"{index}. {format_course(course)}"
+        for index, course in enumerate(result["data"], start=1)
+    )
     return "\n".join(lines)
 
 

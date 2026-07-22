@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 BUILDING_PRIORITY = {
     "教三": 100,
     "教一": 90,
@@ -12,7 +11,9 @@ class DistanceService:
     def get_building_priority(self, building: str) -> int:
         return BUILDING_PRIORITY.get(building, 50)
 
-    def recommend(self, classrooms: list[dict], next_course_location: str = "") -> list[dict]:
+    def recommend(
+        self, classrooms: list[dict], next_course_location: str = ""
+    ) -> list[dict]:
         scored = []
         next_building = next_course_location[:2] if next_course_location else ""
         for room in classrooms:
@@ -26,4 +27,6 @@ class DistanceService:
             enriched["priority"] = score
             enriched["reason"] = reason
             scored.append(enriched)
-        return sorted(scored, key=lambda item: (-item["priority"], item["building"], item["room"]))
+        return sorted(
+            scored, key=lambda item: (-item["priority"], item["building"], item["room"])
+        )

@@ -20,7 +20,9 @@ def ensure_general_access(event: AstrMessageEvent, config: dict) -> str | None:
     return None
 
 
-def ensure_personal_schedule_access(event: AstrMessageEvent, config: dict) -> str | None:
+def ensure_personal_schedule_access(
+    event: AstrMessageEvent, config: dict
+) -> str | None:
     access_error = ensure_general_access(event, config)
     if access_error:
         return access_error
