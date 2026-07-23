@@ -103,20 +103,23 @@ def test_only_reminder_binding_requires_private_chat():
 @pytest.mark.asyncio
 async def test_reminder_delivery_is_deduplicated(tmp_path):
     repository = TaskRepository(tmp_path / "tasks.sqlite")
-    deadline = (datetime.now() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    base = datetime.now().replace(microsecond=0)
+    deadline = (base + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
     repository.replace_tasks([task(deadline)])
     repository.set_target_umo("aiocqhttp:FriendMessage:123")
     service = ReminderService(
-        {"reminder_enabled": True, "remind_before_hours": 24}, repository
+        {"reminder_enabled": True, "reminder_offsets_hours": [5]}, repository
     )
+    service.sync_schedule(base)
     messages: list[str] = []
 
     async def send(_target: str, text: str) -> bool:
         messages.append(text)
         return True
 
-    first = await service.deliver_due(send)
-    second = await service.deliver_due(send)
+    due_time = base + timedelta(hours=3, minutes=1)
+    first = await service.deliver_due(send, due_time)
+    second = await service.deliver_due(send, due_time)
 
     assert first["sent"] == 1
     assert second["sent"] == 0
@@ -127,12 +130,15 @@ async def test_reminder_delivery_is_deduplicated(tmp_path):
 @pytest.mark.asyncio
 async def test_failed_reminder_can_be_retried(tmp_path):
     repository = TaskRepository(tmp_path / "tasks.sqlite")
-    deadline = (datetime.now() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    base = datetime.now().replace(microsecond=0)
+    deadline = (base + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
     repository.replace_tasks([task(deadline)])
     repository.set_target_umo("aiocqhttp:FriendMessage:123")
     service = ReminderService(
-        {"reminder_enabled": True, "remind_before_hours": 24}, repository
+        {"reminder_enabled": True, "reminder_offsets_hours": [5]}, repository
     )
+    service.sync_schedule(base)
+    due_time = base + timedelta(hours=3, minutes=1)
 
     async def fail(_target: str, _text: str) -> bool:
         raise RuntimeError("adapter unavailable")
@@ -141,10 +147,142 @@ async def test_failed_reminder_can_be_retried(tmp_path):
         return True
 
     with pytest.raises(RuntimeError, match="adapter unavailable"):
-        await service.deliver_due(fail)
-    result = await service.deliver_due(succeed)
+        await service.deliver_due(fail, due_time)
+    result = await service.deliver_due(succeed, due_time)
 
     assert result["sent"] == 1
+
+
+def test_schedule_covers_every_pending_dated_type_and_respects_tracking(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    base = datetime.now().replace(microsecond=0)
+    deadline = (base + timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    pending = [
+        task(deadline, "作业"),
+        task(deadline, "视频"),
+        task(deadline, "限时章节"),
+        task(deadline, "讨论"),
+    ]
+    repository.replace_tasks(
+        pending
+        + [
+            task(deadline, "作业", "completed", "完成"),
+            task("", "视频", "pending", "无截止"),
+        ]
+    )
+    service = ReminderService({"reminder_enabled": True}, repository)
+
+    assert service.sync_schedule(base) == 28
+    assert service.status()["scheduled_stages"] == 28
+
+    ignored = service.set_tracking(tracked=False, keyword="测试视频", reason="选做")
+    assert ignored["success"] is True
+    assert service.status()["scheduled_stages"] == 21
+    assert service.status()["ignored_tasks"] == 1
+
+    repository.replace_tasks(pending)
+    service.sync_schedule(base)
+    assert service.status()["scheduled_stages"] == 21
+
+    restored = service.set_tracking(tracked=True, task_key=ignored["data"]["task_key"])
+    assert restored["success"] is True
+    assert service.status()["scheduled_stages"] == 28
+
+
+def test_refresh_removes_future_stages_for_completed_task(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    base = datetime.now().replace(microsecond=0)
+    deadline = (base + timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    pending = task(deadline, "讨论")
+    repository.replace_tasks([pending])
+    service = ReminderService({"reminder_enabled": True}, repository)
+    service.sync_schedule(base)
+    assert service.status()["scheduled_stages"] == 7
+
+    completed = dict(pending, status="completed")
+    repository.replace_tasks([completed])
+    service.sync_schedule(base)
+    assert service.status()["scheduled_stages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_query_refreshes_cloud_once_and_rebuilds_schedule(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    stale = task("")
+    stale["source_update_time"] = "2020-01-01 00:00:00"
+    repository.replace_tasks([stale])
+    calls = 0
+    callbacks = 0
+    reminder = ReminderService({"reminder_enabled": True}, repository)
+
+    class Provider:
+        async def refresh(self) -> dict:
+            nonlocal calls
+            calls += 1
+            fresh = task(
+                (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+            )
+            fresh["source_update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            repository.replace_tasks([fresh])
+            return {"success": True, "data": {}, "message": "ok", "error_code": None}
+
+        @staticmethod
+        def status() -> dict:
+            return {}
+
+    def on_refreshed() -> None:
+        nonlocal callbacks
+        callbacks += 1
+        reminder.sync_schedule()
+
+    service = TaskService(
+        {"enabled": True, "cache_max_age_hours": 24},
+        Provider(),
+        repository,
+        on_refreshed=on_refreshed,
+    )
+
+    first = await service.query_tasks()
+    second = await service.query_tasks()
+
+    assert first["cache_refresh"]["refreshed"] is True
+    assert second["cache_refresh"]["attempted"] is False
+    assert calls == 1
+    assert callbacks == 1
+    assert reminder.status()["scheduled_stages"] == 7
+
+
+@pytest.mark.asyncio
+async def test_stale_refresh_failure_preserves_and_returns_cached_tasks(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    stale = task("", suffix="旧缓存")
+    stale["source_update_time"] = "2020-01-01 00:00:00"
+    repository.replace_tasks([stale])
+
+    class Provider:
+        @staticmethod
+        async def refresh() -> dict:
+            return {
+                "success": False,
+                "data": None,
+                "message": "网络不可用",
+                "error_code": "CHAOXING_REFRESH_FAILED",
+            }
+
+        @staticmethod
+        def status() -> dict:
+            return {}
+
+    service = TaskService(
+        {"enabled": True, "cache_max_age_hours": 24}, Provider(), repository
+    )
+    result = await service.query_tasks()
+
+    assert result["success"] is True
+    assert result["data"][0]["title"] == "测试作业旧缓存"
+    assert result["cache_refresh"]["attempted"] is True
+    assert result["cache_refresh"]["refreshed"] is False
+    assert "网络不可用" in result["message"]
 
 
 def test_online_provider_normalizes_all_supported_types(tmp_path, monkeypatch):
@@ -266,7 +404,7 @@ def test_expired_label_is_not_treated_as_completed():
 async def test_category_tools_query_completed_records():
     class TaskStatus:
         @staticmethod
-        def get_tasks(task_type: str, keyword: str, task_status: str) -> dict:
+        async def query_tasks(task_type: str, keyword: str, task_status: str) -> dict:
             return {
                 "success": True,
                 "data": {

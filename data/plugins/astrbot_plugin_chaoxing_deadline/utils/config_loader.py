@@ -10,8 +10,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "database": "chaoxing_deadlines.sqlite",
     "timeout_seconds": 20,
     "refresh_interval_minutes": 120,
+    "cache_max_age_hours": 24,
     "reminder_enabled": True,
-    "remind_before_hours": 24,
+    "reminder_offsets_hours": [168, 120, 72, 24, 5, 2, 1],
+    "reminder_scan_interval_minutes": 5,
 }
 
 

@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+from collections.abc import Callable
+from typing import Any
+
 from ..providers.chaoxing_provider import ChaoxingProvider
 from ..repositories.task_repository import TaskRepository
 
 
 class TaskService:
-    TASK_TYPES = {"作业", "视频", "讨论"}
+    TASK_TYPES = {"作业", "视频", "限时章节", "讨论"}
     TASK_STATUSES = {"待办": "pending", "已完成": "completed", "全部": ""}
 
     def __init__(
-        self, config: dict, provider: ChaoxingProvider, repository: TaskRepository
+        self,
+        config: dict,
+        provider: ChaoxingProvider,
+        repository: TaskRepository,
+        on_refreshed: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
         self.repository = repository
+        self.on_refreshed = on_refreshed
+        self._refresh_lock = asyncio.Lock()
 
     async def refresh(self) -> dict:
         if not self.config.get("enabled", False):
@@ -23,7 +34,80 @@ class TaskService:
                 "message": "超星在线同步未启用。",
                 "error_code": "CHAOXING_DISABLED",
             }
-        return await self.provider.refresh()
+        async with self._refresh_lock:
+            result = await self.provider.refresh()
+            if result["success"] and self.on_refreshed:
+                callback_result = self.on_refreshed()
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            return result
+
+    async def ensure_fresh(self) -> dict:
+        max_age_hours = max(1, int(self.config.get("cache_max_age_hours", 24)))
+        cache = self.repository.cache_state(max_age_hours)
+        if not cache["stale"]:
+            return {
+                "attempted": False,
+                "refreshed": False,
+                "cache": cache,
+                "refresh_result": None,
+            }
+        async with self._refresh_lock:
+            cache = self.repository.cache_state(max_age_hours)
+            if not cache["stale"]:
+                return {
+                    "attempted": False,
+                    "refreshed": False,
+                    "cache": cache,
+                    "refresh_result": None,
+                }
+            if not self.config.get("enabled", False):
+                refresh_result = {
+                    "success": False,
+                    "data": None,
+                    "message": "缓存已超过刷新期限，但超星在线同步未启用。",
+                    "error_code": "CHAOXING_DISABLED",
+                }
+            else:
+                refresh_result = await self.provider.refresh()
+                if refresh_result["success"] and self.on_refreshed:
+                    callback_result = self.on_refreshed()
+                    if inspect.isawaitable(callback_result):
+                        await callback_result
+            return {
+                "attempted": True,
+                "refreshed": bool(refresh_result["success"]),
+                "cache": self.repository.cache_state(max_age_hours),
+                "refresh_result": refresh_result,
+            }
+
+    @staticmethod
+    def _attach_refresh(result: dict, refresh: dict) -> dict:
+        result["cache_refresh"] = refresh
+        refresh_result = refresh.get("refresh_result")
+        if refresh_result and not refresh_result["success"]:
+            result["message"] += f" 自动刷新未成功：{refresh_result['message']}"
+        elif refresh.get("refreshed"):
+            result["message"] += " 查询前已自动刷新云端缓存。"
+        return result
+
+    async def query_tasks(
+        self, task_type: str = "", keyword: str = "", task_status: str = "待办"
+    ) -> dict:
+        validation = self.get_tasks(task_type, keyword, task_status)
+        if not validation["success"]:
+            return validation
+        refresh = await self.ensure_fresh()
+        return self._attach_refresh(
+            self.get_tasks(task_type, keyword, task_status), refresh
+        )
+
+    async def query_deadlines(self, within_days: int = 7) -> dict:
+        validation = self.get_deadlines(within_days)
+        if not validation["success"]:
+            return validation
+        refresh = await self.ensure_fresh()
+        return self._attach_refresh(self.get_deadlines(within_days), refresh)
 
     def get_tasks(
         self, task_type: str = "", keyword: str = "", task_status: str = "待办"
@@ -32,7 +116,7 @@ class TaskService:
             return {
                 "success": False,
                 "data": [],
-                "message": "任务类型仅支持：作业、视频、讨论。",
+                "message": "任务类型仅支持：作业、视频、限时章节、讨论。",
                 "error_code": "INVALID_TASK_TYPE",
             }
         if task_status not in self.TASK_STATUSES:
@@ -67,4 +151,8 @@ class TaskService:
         }
 
     def status(self) -> dict:
-        return self.provider.status()
+        result = self.provider.status()
+        result["cache"] = self.repository.cache_state(
+            max(1, int(self.config.get("cache_max_age_hours", 24)))
+        )
+        return result

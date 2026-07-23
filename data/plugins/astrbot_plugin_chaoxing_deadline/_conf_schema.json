@@ -26,17 +26,30 @@
   },
   "refresh_interval_minutes": {
     "type": "int",
-    "description": "在线同步及提醒扫描间隔（分钟）",
+    "description": "后台在线同步间隔（分钟）",
     "default": 120
+  },
+  "cache_max_age_hours": {
+    "type": "int",
+    "description": "查询前允许使用本地缓存的最长小时数；超时会先尝试云端同步",
+    "default": 24
   },
   "reminder_enabled": {
     "type": "bool",
     "description": "是否启用截止提醒",
     "default": true
   },
-  "remind_before_hours": {
+  "reminder_offsets_hours": {
+    "type": "list",
+    "items": {
+      "type": "int"
+    },
+    "description": "所有带截止时间且未完成项目的分阶段提醒小时数",
+    "default": [168, 120, 72, 24, 5, 2, 1]
+  },
+  "reminder_scan_interval_minutes": {
     "type": "int",
-    "description": "在截止前多少小时进入提醒窗口",
-    "default": 24
+    "description": "持久化提醒计划扫描间隔（分钟）",
+    "default": 5
   }
 }

@@ -49,6 +49,25 @@ class TaskRepository:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     delivered_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS reminder_ignores (
+                    task_key TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS reminder_schedule (
+                    schedule_key TEXT PRIMARY KEY,
+                    task_key TEXT NOT NULL,
+                    deadline TEXT NOT NULL,
+                    offset_hours INTEGER NOT NULL,
+                    due_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'scheduled',
+                    delivered_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_reminder_schedule_due
+                ON reminder_schedule(status, due_at);
                 """
             )
 
@@ -109,8 +128,11 @@ class TaskRepository:
             clauses.append("status = ?")
             params.append(task_status)
         if task_type:
-            clauses.append("task_type = ?")
-            params.append(task_type)
+            if task_type == "视频":
+                clauses.append("task_type IN ('视频', '限时章节')")
+            else:
+                clauses.append("task_type = ?")
+                params.append(task_type)
         if keyword:
             clauses.append("(course_name LIKE ? OR title LIKE ?)")
             params.extend((f"%{keyword}%", f"%{keyword}%"))
@@ -161,6 +183,190 @@ class TaskRepository:
                 ),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def cache_state(self, max_age_hours: int, now: datetime | None = None) -> dict:
+        current = now or datetime.now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = 'last_sync_time'"
+            ).fetchone()
+        if not row:
+            return {"stale": True, "last_sync_time": None, "age_hours": None}
+        try:
+            last_sync = datetime.strptime(row["value"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return {
+                "stale": True,
+                "last_sync_time": row["value"],
+                "age_hours": None,
+            }
+        age_hours = max(0.0, (current - last_sync).total_seconds() / 3600)
+        return {
+            "stale": age_hours >= max(1, max_age_hours),
+            "last_sync_time": row["value"],
+            "age_hours": round(age_hours, 2),
+        }
+
+    def sync_reminder_schedule(
+        self, offsets_hours: list[int], now: datetime | None = None
+    ) -> int:
+        current = now or datetime.now()
+        now_text = current.strftime("%Y-%m-%d %H:%M:%S")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM reminder_schedule
+                WHERE status = 'scheduled' AND NOT EXISTS (
+                    SELECT 1 FROM tasks
+                    LEFT JOIN reminder_ignores ON reminder_ignores.task_key = tasks.task_key
+                    WHERE tasks.task_key = reminder_schedule.task_key
+                      AND tasks.status = 'pending'
+                      AND tasks.deadline = reminder_schedule.deadline
+                      AND tasks.deadline > ?
+                      AND reminder_ignores.task_key IS NULL
+                )
+                """,
+                (now_text,),
+            )
+            tasks = connection.execute(
+                """
+                SELECT tasks.task_key, tasks.deadline
+                FROM tasks
+                LEFT JOIN reminder_ignores ON reminder_ignores.task_key = tasks.task_key
+                WHERE tasks.status = 'pending'
+                  AND tasks.deadline IS NOT NULL AND tasks.deadline != ''
+                  AND tasks.deadline > ?
+                  AND reminder_ignores.task_key IS NULL
+                """,
+                (now_text,),
+            ).fetchall()
+            inserted = 0
+            for task in tasks:
+                try:
+                    deadline = datetime.strptime(task["deadline"], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                for offset_hours in offsets_hours:
+                    due_at = deadline - timedelta(hours=offset_hours)
+                    if due_at <= current:
+                        continue
+                    schedule_key = (
+                        f"{task['task_key']}|{task['deadline']}|{offset_hours}"
+                    )
+                    cursor = connection.execute(
+                        """
+                        INSERT OR IGNORE INTO reminder_schedule(
+                            schedule_key, task_key, deadline, offset_hours, due_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            schedule_key,
+                            task["task_key"],
+                            task["deadline"],
+                            offset_hours,
+                            due_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        ),
+                    )
+                    inserted += cursor.rowcount
+        return inserted
+
+    def due_scheduled_reminders(self, now: datetime | None = None) -> list[dict]:
+        current = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT reminder_schedule.schedule_key,
+                       reminder_schedule.offset_hours,
+                       reminder_schedule.due_at,
+                       tasks.*
+                FROM reminder_schedule
+                JOIN tasks ON tasks.task_key = reminder_schedule.task_key
+                LEFT JOIN reminder_ignores ON reminder_ignores.task_key = tasks.task_key
+                WHERE reminder_schedule.status = 'scheduled'
+                  AND reminder_schedule.due_at <= ?
+                  AND reminder_schedule.deadline > ?
+                  AND reminder_schedule.deadline = tasks.deadline
+                  AND tasks.status = 'pending'
+                  AND reminder_ignores.task_key IS NULL
+                ORDER BY reminder_schedule.due_at, tasks.deadline
+                """,
+                (current, current),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_schedule_delivered(self, schedule_key: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE reminder_schedule
+                SET status = 'delivered', delivered_at = CURRENT_TIMESTAMP
+                WHERE schedule_key = ?
+                """,
+                (schedule_key,),
+            )
+
+    def find_trackable_tasks(
+        self, keyword: str = "", task_key: str = "", limit: int = 10
+    ) -> list[dict]:
+        clauses = ["tasks.deadline IS NOT NULL", "tasks.deadline != ''"]
+        params: list[str | int] = []
+        if task_key:
+            clauses.append("tasks.task_key = ?")
+            params.append(task_key)
+        elif keyword:
+            clauses.append("(tasks.course_name LIKE ? OR tasks.title LIKE ?)")
+            params.extend((f"%{keyword}%", f"%{keyword}%"))
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tasks.*,
+                       CASE WHEN reminder_ignores.task_key IS NULL THEN 1 ELSE 0 END AS tracked,
+                       COALESCE(reminder_ignores.reason, '') AS ignore_reason
+                FROM tasks
+                LEFT JOIN reminder_ignores ON reminder_ignores.task_key = tasks.task_key
+                WHERE """
+                + " AND ".join(clauses)
+                + " ORDER BY tasks.deadline, tasks.course_name LIMIT ?",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_task_ignored(self, task_key: str, ignored: bool, reason: str = "") -> None:
+        with self._connect() as connection:
+            if ignored:
+                connection.execute(
+                    """
+                    INSERT INTO reminder_ignores(task_key, reason) VALUES(?, ?)
+                    ON CONFLICT(task_key) DO UPDATE SET reason = excluded.reason
+                    """,
+                    (task_key, reason),
+                )
+                connection.execute(
+                    "DELETE FROM reminder_schedule WHERE task_key = ? AND status = 'scheduled'",
+                    (task_key,),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM reminder_ignores WHERE task_key = ?", (task_key,)
+                )
+
+    def reminder_schedule_status(self) -> dict:
+        with self._connect() as connection:
+            scheduled = connection.execute(
+                "SELECT COUNT(*) AS count FROM reminder_schedule WHERE status = 'scheduled'"
+            ).fetchone()["count"]
+            delivered = connection.execute(
+                "SELECT COUNT(*) AS count FROM reminder_schedule WHERE status = 'delivered'"
+            ).fetchone()["count"]
+            ignored = connection.execute(
+                "SELECT COUNT(*) AS count FROM reminder_ignores"
+            ).fetchone()["count"]
+        return {
+            "scheduled_stages": int(scheduled),
+            "delivered_stages": int(delivered),
+            "ignored_tasks": int(ignored),
+        }
 
     def status(self) -> dict:
         with self._connect() as connection:

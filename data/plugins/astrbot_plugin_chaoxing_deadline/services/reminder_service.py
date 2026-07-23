@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from ..repositories.task_repository import TaskRepository
 
 
 class ReminderService:
+    DEFAULT_OFFSETS_HOURS = [168, 120, 72, 24, 5, 2, 1]
+
     def __init__(self, config: dict, repository: TaskRepository) -> None:
         self.config = config
         self.repository = repository
@@ -17,14 +20,101 @@ class ReminderService:
         self.repository.clear_target_umo()
 
     def status(self) -> dict:
-        return {
+        result = {
             "enabled": bool(self.config.get("reminder_enabled", True)),
             "target_bound": bool(self.repository.get_target_umo()),
-            "before_hours": max(1, int(self.config.get("remind_before_hours", 24))),
+            "offsets_hours": self.offsets_hours(),
+            "scan_interval_minutes": max(
+                1, int(self.config.get("reminder_scan_interval_minutes", 5))
+            ),
+        }
+        result.update(self.repository.reminder_schedule_status())
+        return result
+
+    def offsets_hours(self) -> list[int]:
+        values = self.config.get("reminder_offsets_hours", self.DEFAULT_OFFSETS_HOURS)
+        if not isinstance(values, list):
+            values = self.DEFAULT_OFFSETS_HOURS
+        normalized = {
+            int(value)
+            for value in values
+            if str(value).strip().isdigit() and int(value) > 0
+        }
+        return sorted(normalized or self.DEFAULT_OFFSETS_HOURS, reverse=True)
+
+    def sync_schedule(self, now: datetime | None = None) -> int:
+        """Synchronize every pending, dated, non-ignored task into reminder stages."""
+        return self.repository.sync_reminder_schedule(self.offsets_hours(), now)
+
+    def set_tracking(
+        self,
+        *,
+        tracked: bool,
+        task_key: str = "",
+        keyword: str = "",
+        reason: str = "",
+    ) -> dict:
+        if not task_key.strip() and not keyword.strip():
+            return {
+                "success": False,
+                "data": [],
+                "message": "请提供任务 task_key 或课程/任务关键词。",
+                "error_code": "TASK_SELECTOR_REQUIRED",
+            }
+        matches = self.repository.find_trackable_tasks(
+            keyword.strip(), task_key.strip()
+        )
+        if not matches:
+            return {
+                "success": False,
+                "data": [],
+                "message": "没有找到带明确截止时间的匹配任务。",
+                "error_code": "TRACKABLE_TASK_NOT_FOUND",
+            }
+        if len(matches) > 1:
+            candidates = [
+                {
+                    key: row[key]
+                    for key in (
+                        "task_key",
+                        "task_type",
+                        "course_name",
+                        "title",
+                        "deadline",
+                        "tracked",
+                    )
+                }
+                for row in matches
+            ]
+            return {
+                "success": False,
+                "data": candidates,
+                "message": "匹配到多个任务，请使用返回的 task_key 精确选择。",
+                "error_code": "AMBIGUOUS_TASK_SELECTOR",
+            }
+        task = matches[0]
+        self.repository.set_task_ignored(task["task_key"], not tracked, reason.strip())
+        if tracked:
+            self.sync_schedule()
+        action = "恢复跟踪" if tracked else "取消跟踪"
+        return {
+            "success": True,
+            "data": {
+                "task_key": task["task_key"],
+                "task_type": task["task_type"],
+                "course_name": task["course_name"],
+                "title": task["title"],
+                "deadline": task["deadline"],
+                "tracked": tracked,
+            },
+            "message": f"已{action}：{task['course_name']} - {task['title']}。",
+            "error_code": None,
         }
 
     async def deliver_due(
-        self, send_message: Callable[[str, str], Awaitable[bool]]
+        self,
+        send_message: Callable[[str, str], Awaitable[bool]],
+        now: datetime | None = None,
     ) -> dict:
         if not self.config.get("reminder_enabled", True):
             return {"success": False, "message": "超星截止提醒未启用。", "sent": 0}
@@ -32,19 +122,25 @@ class ReminderService:
         if not target:
             return {"success": False, "message": "尚未绑定提醒私聊。", "sent": 0}
 
-        before_hours = max(1, int(self.config.get("remind_before_hours", 24)))
         claimed: list[tuple[str, dict]] = []
-        for task in self.repository.due_reminders(before_hours):
-            reminder_key = f"{task['task_key']}|{task['deadline']}|{before_hours}"
+        for task in self.repository.due_scheduled_reminders(now):
+            reminder_key = task["schedule_key"]
             if self.repository.claim_reminder(reminder_key):
                 claimed.append((reminder_key, task))
         if not claimed:
             return {"success": True, "message": "没有新的到期提醒。", "sent": 0}
 
-        lines = [f"超星学习通截止提醒（未来 {before_hours} 小时）"]
+        lines = ["超星学习通截止提醒"]
         for _, task in claimed:
+            offset = int(task["offset_hours"])
+            stage = (
+                f"{offset // 24} 天"
+                if offset >= 24 and offset % 24 == 0
+                else f"{offset} 小时"
+            )
             lines.append(
-                f"[{task['task_type']}] {task['course_name']} - {task['title']}\n截止：{task['deadline']}"
+                f"[{task['task_type']}][截止前 {stage}] "
+                f"{task['course_name']} - {task['title']}\n截止：{task['deadline']}"
             )
         try:
             sent = await send_message(target, "\n\n".join(lines))
@@ -56,6 +152,7 @@ class ReminderService:
             raise
         for reminder_key, _ in claimed:
             self.repository.mark_delivered(reminder_key)
+            self.repository.mark_schedule_delivered(reminder_key)
         return {
             "success": True,
             "message": "超星截止提醒已推送。",
