@@ -14,11 +14,6 @@
     "description": "学习通密码（仅保存在 AstrBot 运行时配置）",
     "default": ""
   },
-  "owner_qq_id": {
-    "type": "string",
-    "description": "允许查询和绑定提醒的 QQ 用户 ID",
-    "default": ""
-  },
   "database": {
     "type": "string",
     "description": "独立的任务与提醒状态数据库文件名",

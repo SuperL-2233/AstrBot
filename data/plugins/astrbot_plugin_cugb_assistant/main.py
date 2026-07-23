@@ -8,7 +8,10 @@ from astrbot.api import llm_tool, logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .formatters.classroom_formatter import format_classroom_list, format_recommendations
+from .formatters.classroom_formatter import (
+    format_classroom_list,
+    format_recommendations,
+)
 from .formatters.course_formatter import format_course_list, format_single_course
 from .formatters.status_formatter import format_status
 from .importers.import_timetable import TimetableImporter
@@ -22,7 +25,10 @@ from .services.distance_service import DistanceService
 from .services.reminder_service import ReminderService
 from .utils.config_loader import load_plugin_config
 from .utils.paths import resolve_data_path
-from .utils.permission_utils import ensure_general_access, ensure_personal_schedule_access
+from .utils.permission_utils import (
+    ensure_general_access,
+    ensure_personal_schedule_access,
+)
 from .utils.time_utils import combine_date_time, today_local
 
 
@@ -30,7 +36,7 @@ from .utils.time_utils import combine_date_time, today_local
     "astrbot_plugin_cugb_assistant",
     "macroladlezilla",
     "CUGB 校园助手插件",
-    "0.1.0",
+    "0.1.1",
 )
 class CugbAssistantPlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -92,6 +98,10 @@ class CugbAssistantPlugin(star.Star):
             "classroom": await self.classroom_service.get_status(),
             "reminder": self.reminder_service.get_status(),
         }
+
+    async def get_public_status(self) -> dict:
+        """Return CUGB status for the cross-plugin aggregate status tool."""
+        return await self._build_status()
 
     @filter.command("校园助手帮助", alias={"cugb帮助", "校园帮助"})
     async def help_command(self, event: AstrMessageEvent):
@@ -357,11 +367,3 @@ class CugbAssistantPlugin(star.Star):
             next_course_location = next_course["data"]["location"] if next_course["success"] else ""
         data = self.distance_service.recommend(rows, next_course_location=next_course_location)
         return json.dumps({"success": True, "data": data, "message": "已返回推荐结果。"}, ensure_ascii=False)
-
-    @llm_tool("get_plugin_status")
-    async def tool_get_plugin_status(self, _context) -> str:
-        """查询插件状态。
-
-        Args:
-        """
-        return json.dumps(await self._build_status(), ensure_ascii=False)

@@ -14,7 +14,9 @@
 
 ## 配置与使用
 
-在 AstrBot 插件配置中设置 `enabled`、`phone`、`password` 和 `owner_qq_id`。手机号、密码、Cookie、动态课程令牌、SQLite 数据库和 QQ 会话目标都属于运行时私密数据，不应提交到 Git。
+在 AstrBot 插件配置中设置 `enabled`、`phone` 和 `password`。插件不要求配置 QQ ID：查询命令可直接使用；提醒绑定和解绑必须在私聊执行，提醒目标就是最近执行绑定命令的私聊。手机号、密码、Cookie、动态课程令牌、SQLite 数据库和 QQ 会话目标都属于运行时私密数据，不应提交到 Git。
+
+当前只保存一个提醒目标，因此新的私聊绑定会覆盖旧目标。若机器人对多人开放，请使用 AstrBot 平台或会话权限限制谁能执行插件命令。
 
 启用后先在所有者 QQ 私聊中执行：
 
@@ -37,3 +39,9 @@
 本插件只读取数据，不提交作业、不发布讨论、不播放视频，也不写入学习进度。请遵守学校规定和超星平台条款，并控制同步频率。
 
 Vendored 上游代码保留 MIT 许可证，位于 `providers/vendor/`。
+
+## LLM tools
+
+- `get_chaoxing_tasks`：查询作业、视频章节和讨论。
+- `get_chaoxing_deadlines`：查询指定天数内的明确截止任务。
+- `get_plugin_status`：唯一的综合状态入口，同时返回 CUGB 校园助手与学习通插件的能力清单和状态。

@@ -12,12 +12,15 @@ if str(PLUGIN_PARENT) not in sys.path:
 from astrbot_plugin_chaoxing_deadline.providers import (
     chaoxing_provider as provider_module,
 )
+from astrbot_plugin_chaoxing_deadline.main import ChaoxingDeadlinePlugin
 from astrbot_plugin_chaoxing_deadline.providers.chaoxing_provider import (
     ChaoxingProvider,
 )
 from astrbot_plugin_chaoxing_deadline.repositories.task_repository import TaskRepository
 from astrbot_plugin_chaoxing_deadline.services.reminder_service import ReminderService
 from astrbot_plugin_chaoxing_deadline.services.task_service import TaskService
+from astrbot_plugin_chaoxing_deadline.utils.config_loader import load_plugin_config
+from astrbot_plugin_chaoxing_deadline.utils.permission import ensure_private_chat
 
 
 def task(deadline: str, task_type: str = "作业") -> dict:
@@ -54,6 +57,19 @@ def test_task_service_validates_type_and_deadline_window(tmp_path):
 
     assert service.get_tasks("考试")["error_code"] == "INVALID_TASK_TYPE"
     assert service.get_deadlines(366)["error_code"] == "INVALID_WITHIN_DAYS"
+
+
+def test_configuration_does_not_require_owner_qq_id():
+    assert "owner_qq_id" not in load_plugin_config(None)
+
+
+def test_only_reminder_binding_requires_private_chat():
+    class Event:
+        @staticmethod
+        def is_private_chat() -> bool:
+            return False
+
+    assert "私聊" in ensure_private_chat(Event())
 
 
 @pytest.mark.asyncio
@@ -201,3 +217,42 @@ def test_upstream_parser_does_not_invent_a_missing_deadline():
         "",
         "",
     )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_status_tool_reports_both_plugins():
+    class CugbPlugin:
+        @staticmethod
+        async def get_public_status() -> dict:
+            return {"course": {"count": 3}}
+
+    class Metadata:
+        activated = True
+        star_cls = CugbPlugin()
+
+    class Context:
+        @staticmethod
+        def get_registered_star(name: str):
+            return Metadata() if name == "astrbot_plugin_cugb_assistant" else None
+
+    class TaskStatus:
+        @staticmethod
+        def status() -> dict:
+            return {"enabled": True, "counts": {"作业": 2}}
+
+    class ReminderStatus:
+        @staticmethod
+        def status() -> dict:
+            return {"enabled": True, "target_bound": False, "before_hours": 24}
+
+    plugin = object.__new__(ChaoxingDeadlinePlugin)
+    plugin.context = Context()
+    plugin.task_service = TaskStatus()
+    plugin.reminder_service = ReminderStatus()
+    plugin._refresh_task = None
+
+    payload = __import__("json").loads(await plugin.tool_get_plugin_status(None))
+
+    assert payload["plugins"]["cugb_assistant"]["available"] is True
+    assert "空教室查询" in payload["plugins"]["cugb_assistant"]["capabilities"]
+    assert "学习通作业查询" in payload["plugins"]["chaoxing_deadline"]["capabilities"]

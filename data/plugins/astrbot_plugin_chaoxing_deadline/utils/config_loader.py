@@ -7,7 +7,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
     "phone": "",
     "password": "",
-    "owner_qq_id": "",
     "database": "chaoxing_deadlines.sqlite",
     "timeout_seconds": 20,
     "refresh_interval_minutes": 120,
