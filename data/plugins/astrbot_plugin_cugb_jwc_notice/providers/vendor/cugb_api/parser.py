@@ -8,7 +8,7 @@ from .models import ContentLink, Notice, NoticeDetail
 
 
 class NoticeParseError(ValueError):
-    """Raised when the expected notice content cannot be found."""
+    """Raised when the expected notice list cannot be found."""
 
 
 class _NoticeListParser(HTMLParser):
@@ -49,7 +49,11 @@ class _NoticeListParser(HTMLParser):
             published_date = " ".join("".join(self._date_parts).split())
             if title and published_date:
                 self.notices.append(
-                    Notice(title, published_date, urljoin(self.base_url, self._anchor_href))
+                    Notice(
+                        title=title,
+                        published_date=published_date,
+                        url=urljoin(self.base_url, self._anchor_href),
+                    )
                 )
             self._anchor_href = None
             self._capture = None
@@ -86,7 +90,9 @@ class _NoticeDetailParser(HTMLParser):
         self.content_parts: list[str] = []
         self.links: list[ContentLink] = []
         self.images: list[str] = []
-        self._title_depth = self._info_depth = self._content_depth = 0
+        self._title_depth = 0
+        self._info_depth = 0
+        self._content_depth = 0
         self._ignored_tag: str | None = None
         self._link_href: str | None = None
         self._link_parts: list[str] = []
@@ -103,6 +109,7 @@ class _NoticeDetailParser(HTMLParser):
         if tag == "div" and "detail_content_box" in classes:
             self._content_depth = 1
             return
+
         if tag == "div":
             if self._title_depth:
                 self._title_depth += 1
@@ -110,6 +117,7 @@ class _NoticeDetailParser(HTMLParser):
                 self._info_depth += 1
             if self._content_depth:
                 self._content_depth += 1
+
         if self._content_depth:
             if tag in {"script", "style"}:
                 self._ignored_tag = tag
@@ -129,9 +137,8 @@ class _NoticeDetailParser(HTMLParser):
                 self._ignored_tag = None
             return
         if self._content_depth and tag == "a" and self._link_href:
-            self.links.append(
-                ContentLink(" ".join("".join(self._link_parts).split()), self._link_href)
-            )
+            text = " ".join("".join(self._link_parts).split())
+            self.links.append(ContentLink(text=text, url=self._link_href))
             self._link_href = None
             self._link_parts = []
         if self._content_depth and tag in self._block_tags:
@@ -158,18 +165,21 @@ class _NoticeDetailParser(HTMLParser):
 
 
 def parse_notice_detail(
-    html: str, base_url: str, *, notice_id: str, fallback_date: str
+    html: str,
+    base_url: str,
+    *,
+    notice_id: str,
+    fallback_date: str,
 ) -> NoticeDetail:
     parser = _NoticeDetailParser(base_url)
     parser.feed(html)
     parser.close()
     title = " ".join("".join(parser.title_parts).split())
-    content_lines = [
-        " ".join(line.split()) for line in "".join(parser.content_parts).splitlines()
-    ]
+    content_lines = [" ".join(line.split()) for line in "".join(parser.content_parts).splitlines()]
     content = "\n".join(line for line in content_lines if line)
     if not title or not content:
-        raise NoticeParseError("Notice detail content was not found")
+        raise NoticeParseError("Notice detail content was not found; the layout may have changed")
+
     info = " ".join("".join(parser.info_parts).split())
     author_match = re.search(r"作者[：:]\s*(.*?)\s+发布时间", info)
     date_match = re.search(r"发布时间[：:]\s*(\d{4}-\d{2}-\d{2})", info)

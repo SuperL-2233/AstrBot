@@ -15,8 +15,15 @@ class Notice:
     def notice_id(self) -> str:
         return PurePosixPath(urlsplit(self.url).path).stem
 
-    def to_dict(self) -> dict[str, str]:
-        return {**asdict(self), "id": self.notice_id}
+    def detail_path(self, prefix: str = "/api/v1/notices") -> str:
+        return f"{prefix}/{self.published_date}/{self.notice_id}"
+
+    def to_dict(self, detail_prefix: str = "/api/v1/notices") -> dict[str, str]:
+        return {
+            **asdict(self),
+            "id": self.notice_id,
+            "detail_path": self.detail_path(detail_prefix),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,3 +49,18 @@ class NoticeDetail:
             "links": [asdict(link) for link in self.links],
             "images": list(self.images),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class Snapshot:
+    notices: tuple[Notice, ...]
+    fetched_at: str
+    page: int = 1
+    stale: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DetailSnapshot:
+    detail: NoticeDetail
+    fetched_at: str
+    stale: bool = False

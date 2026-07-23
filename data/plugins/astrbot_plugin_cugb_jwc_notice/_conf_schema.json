@@ -1,18 +1,43 @@
 {
   "enabled": {
     "type": "bool",
-    "description": "是否启用教务处通知后台同步",
+    "description": "是否启用新闻公告后台同步",
     "default": true
   },
   "database": {
     "type": "string",
-    "description": "通知、正文、推送队列和绑定目标的独立数据库文件名",
+    "description": "全部来源的通知、正文、推送队列和绑定目标的统一数据库文件名",
     "default": "jwc_notices.sqlite"
   },
   "source_url": {
     "type": "string",
-    "description": "CUGB 教务处公开通知列表 HTTPS 地址",
+    "description": "教务处学生专区公开列表 HTTPS 地址",
     "default": "https://jwc.cugb.edu.cn/xszq/"
+  },
+  "teaching_updates_url": {
+    "type": "string",
+    "description": "教务处教学动态公开列表 HTTPS 地址",
+    "default": "https://jwc.cugb.edu.cn/jxdt/"
+  },
+  "ai_college_news_url": {
+    "type": "string",
+    "description": "人工智能学院新闻动态公开列表 HTTPS 地址",
+    "default": "https://sai.cugb.edu.cn/xyxw/"
+  },
+  "ai_college_notices_url": {
+    "type": "string",
+    "description": "人工智能学院公告公开列表 HTTPS 地址",
+    "default": "https://sai.cugb.edu.cn/xygg/"
+  },
+  "student_affairs_news_url": {
+    "type": "string",
+    "description": "学工处新闻动态公开列表 HTTPS 地址",
+    "default": "https://bm.cugb.edu.cn/xgb/jjxg/"
+  },
+  "student_affairs_notices_url": {
+    "type": "string",
+    "description": "学工处通知公告公开列表 HTTPS 地址",
+    "default": "https://bm.cugb.edu.cn/xgb/tzgg/"
   },
   "refresh_interval_minutes": {
     "type": "int",
@@ -31,12 +56,12 @@
   },
   "max_search_pages_per_year": {
     "type": "int",
-    "description": "公开列表归档不足时，每个年份最多读取的官网搜索结果页数",
+    "description": "教务处学生专区公开列表归档不足时，每个年份最多读取的官网搜索结果页数",
     "default": 100
   },
   "timeout_seconds": {
     "type": "int",
-    "description": "单次教务处网页请求超时秒数",
+    "description": "单次网页请求超时秒数",
     "default": 10
   },
   "request_retries": {
@@ -61,7 +86,7 @@
   },
   "detail_retry_limit": {
     "type": "int",
-    "description": "每次同步最多单独重试的缺失正文条数",
+    "description": "每次同步每个来源最多单独重试的缺失正文条数",
     "default": 20
   }
 }

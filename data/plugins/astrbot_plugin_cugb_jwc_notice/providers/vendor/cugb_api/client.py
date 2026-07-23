@@ -20,11 +20,17 @@ class ResourceNotFound(FetchError):
 
 class NoticeClient:
     def __init__(
-        self, source_url: str, timeout_seconds: float = 10, retries: int = 2
+        self,
+        source_url: str,
+        timeout_seconds: float = 10,
+        retries: int = 2,
     ) -> None:
         self.source_url = source_url
         self.timeout_seconds = timeout_seconds
         self.retries = retries
+
+    def fetch(self) -> list[Notice]:
+        return self.fetch_page(1)
 
     def fetch_page(self, page: int) -> list[Notice]:
         if page < 1:
@@ -37,7 +43,8 @@ class NoticeClient:
 
     def fetch_detail(self, published_date: str, notice_id: str) -> NoticeDetail:
         detail_url = urljoin(
-            self.source_url, f"/c/{published_date}/{notice_id}.shtml"
+            self.source_url,
+            f"/c/{published_date}/{notice_id}.shtml",
         )
         html, final_url = self._download(detail_url)
         return parse_notice_detail(
@@ -54,7 +61,7 @@ class NoticeClient:
                 request = Request(
                     url,
                     headers={
-                        "User-Agent": "AstrBot-CUGB-JWC-Notice/0.1",
+                        "User-Agent": "Notice-API/2.1",
                         "Accept": "text/html,application/xhtml+xml",
                         "Accept-Encoding": "gzip",
                     },
@@ -64,12 +71,11 @@ class NoticeClient:
                     if response.headers.get("Content-Encoding", "").lower() == "gzip":
                         body = gzip.decompress(body)
                     charset = response.headers.get_content_charset() or "utf-8"
-                    return body.decode(charset, errors="replace"), response.geturl()
+                    html = body.decode(charset, errors="replace")
+                    return html, response.geturl()
             except HTTPError as error:
                 if error.code == 404:
-                    raise ResourceNotFound(
-                        f"Upstream resource not found: {url}"
-                    ) from error
+                    raise ResourceNotFound(f"Upstream resource not found: {url}") from error
                 last_error = error
                 if attempt < self.retries:
                     time.sleep(2**attempt)

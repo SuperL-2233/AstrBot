@@ -1,7 +1,7 @@
 name: astrbot_plugin_cugb_jwc_notice
-display_name: CUGB 教务处通知
+display_name: CUGB 新闻公告检索
 author: macroladlezilla
-description: 定时同步教务处公开通知，向绑定 QQ 私聊推送更新，并提供正文关键词检索。
-short_desc: 教务处通知同步、QQ 推送与正文检索。
-version: 0.3.0
+description: 统一同步 CUGB 教务处、人工智能学院与学工处的公开新闻公告，向绑定 QQ 私聊推送更新，并提供本地正文检索。
+short_desc: CUGB 新闻公告同步、QQ 推送与本地检索。
+version: 0.4.0
 repo: https://github.com/macroladlezilla/astrbot_plugin_cugb_jwc_notice
