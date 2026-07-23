@@ -2,19 +2,53 @@ from __future__ import annotations
 
 
 def format_search_results(result: dict) -> str:
+    return format_notice_page(result, "教务通知正文搜索")
+
+
+def format_notice_page(result: dict, title: str = "教务通知列表") -> str:
     if not result["success"]:
         return result["message"]
-    if not result["data"]:
+    data = result["data"]
+    if not data["items"]:
         return result["message"]
-    lines = [result["message"]]
-    for row in result["data"]:
+    lines = [title, result["message"]]
+    for row in data["items"]:
         lines.append(f"\n{row['published_date']}｜{row['title']}")
         lines.append(row["url"])
+        if row.get("matched_excerpt"):
+            lines.append(f"摘要：{row['matched_excerpt']}")
         for link in row.get("links", []):
             label = str(link.get("text") or "正文附件")
             url = str(link.get("url") or "")
             if url and url != row["url"]:
                 lines.append(f"{label}：{url}")
+    if data["has_more"]:
+        lines.append(
+            f"\n还有 {data['total_count'] - data['offset'] - data['returned_count']} 条，"
+            f"下一页 offset={data['offset'] + data['returned_count']}。"
+        )
+    return "\n".join(lines)
+
+
+def format_statistics(result: dict) -> str:
+    if not result["success"]:
+        return result["message"]
+    data = result["data"]
+    lines = [
+        "CUGB 教务通知统计",
+        f"总记录：{data['total_count']} 条",
+        f"已缓存正文：{data['with_content_count']} 条",
+        f"缺失正文：{data['missing_content_count']} 条",
+        f"日期范围：{data['earliest_date'] or '无'} 至 {data['latest_date'] or '无'}",
+        f"确认覆盖至：{data['coverage_since_date'] or '尚未完成'}",
+    ]
+    if data["monthly_counts"]:
+        lines.append(
+            "按月："
+            + "，".join(
+                f"{row['month']} {row['count']}条" for row in data["monthly_counts"]
+            )
+        )
     return "\n".join(lines)
 
 

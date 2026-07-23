@@ -24,6 +24,7 @@ class NoticeService:
         self.repository = repository
         self.send_message = send_message
         self._refresh_lock = asyncio.Lock()
+        self._delivery_lock = asyncio.Lock()
 
     def get_target_umo(self) -> str:
         configured = str(self.config.get("target_umo", "")).strip()
@@ -59,7 +60,6 @@ class NoticeService:
             needs_backfill = (
                 not sync_state["coverage_since_date"]
                 or sync_state["coverage_since_date"] > effective_date
-                or sync_state["missing_detail_count"] > 0
             )
             stop_at_ids = set() if needs_backfill else sync_state["notice_ids"]
             try:
@@ -73,10 +73,18 @@ class NoticeService:
                     error_code="NOTICE_SOURCE_UNAVAILABLE",
                 )
 
-            missing_ids = self.repository.missing_detail_ids(summaries)
+            retry_limit = min(
+                100, max(1, int(self.config.get("detail_retry_limit", 20)))
+            )
+            retry_summaries = self.repository.missing_detail_summaries(retry_limit)
+            summaries_by_id = {str(row["id"]): row for row in summaries}
+            for row in retry_summaries:
+                summaries_by_id.setdefault(str(row["id"]), row)
+            detail_candidates = list(summaries_by_id.values())
+            missing_ids = self.repository.missing_detail_ids(detail_candidates)
             detail_errors: list[str] = []
             records: list[dict[str, Any]] = []
-            for summary in summaries:
+            for summary in detail_candidates:
                 record: dict[str, Any] = dict(summary)
                 if str(summary["id"]) in missing_ids:
                     try:
@@ -99,10 +107,15 @@ class NoticeService:
             new_rows = snapshot["new_rows"]
             notification_rows = snapshot["notification_rows"]
             delivery = await self.deliver_pending()
+            database_stats = self.repository.statistics()
+            scan_mode = "historical_backfill" if needs_backfill else "incremental"
+            scan_label = "历史范围扫描" if needs_backfill else "增量检查"
             message = (
-                f"教务处同步完成：从 {effective_date} 起读取 {pages_fetched} 页、"
-                f"{len(records)} 条，新增入库 {len(new_rows)} 条，"
-                f"新增通知 {len(notification_rows)} 条。"
+                f"教务处同步完成：本次{scan_label} {pages_fetched} 页、"
+                f"{len(summaries)} 条；数据库共 {database_stats['total_count']} 条，"
+                f"范围 {database_stats['earliest_date'] or '无'} 至 "
+                f"{database_stats['latest_date'] or '无'}；"
+                f"新增入库 {len(new_rows)} 条，新增通知 {len(notification_rows)} 条。"
             )
             if detail_errors:
                 message += f" {len(detail_errors)} 条正文暂未缓存。"
@@ -114,58 +127,78 @@ class NoticeService:
                 True,
                 message,
                 data={
-                    "fetched_count": len(records),
+                    "scan_mode": scan_mode,
+                    "scanned_notice_count": len(summaries),
                     "pages_fetched": pages_fetched,
-                    "earliest_date": effective_date,
+                    "requested_earliest_date": effective_date,
+                    "database_total_count": database_stats["total_count"],
+                    "database_with_content_count": database_stats["with_content_count"],
+                    "database_missing_content_count": database_stats[
+                        "missing_content_count"
+                    ],
+                    "database_earliest_date": database_stats["earliest_date"],
+                    "database_latest_date": database_stats["latest_date"],
                     "new_count": len(new_rows),
-                    "new_notices": new_rows,
+                    "new_notices": [self._summary(row) for row in new_rows],
                     "notification_count": len(notification_rows),
-                    "notifications": notification_rows,
+                    "notifications": [self._summary(row) for row in notification_rows],
                     "baseline_count": snapshot["baseline_count"],
+                    "detail_retry_count": len(retry_summaries),
                     "detail_error_count": len(detail_errors),
-                    "detail_errors": detail_errors,
+                    "detail_errors": detail_errors[:20],
                     **delivery,
                 },
             )
 
     async def deliver_pending(self) -> dict[str, Any]:
-        pending = self.repository.pending_notifications()
-        if not pending:
+        async with self._delivery_lock:
+            pending = self.repository.pending_notifications()
+            if not pending:
+                return {
+                    "sent_count": 0,
+                    "pending_count": 0,
+                    "message": "没有待推送通知。",
+                }
+            target = self.get_target_umo()
+            if not target:
+                return {
+                    "sent_count": 0,
+                    "pending_count": len(pending),
+                    "message": "尚未绑定 QQ 私聊目标。",
+                }
+            sent_count = 0
+            for index in range(0, len(pending), 10):
+                batch = pending[index : index + 10]
+                try:
+                    sent = await self.send_message(target, self._format_push(batch))
+                except Exception as exc:
+                    return {
+                        "sent_count": sent_count,
+                        "pending_count": len(pending) - sent_count,
+                        "message": f"QQ 发送失败：{exc}",
+                    }
+                if not sent:
+                    return {
+                        "sent_count": sent_count,
+                        "pending_count": len(pending) - sent_count,
+                        "message": "AstrBot 未找到目标会话的平台适配器。",
+                    }
+                self.repository.mark_delivered([str(row["notice_id"]) for row in batch])
+                sent_count += len(batch)
             return {
-                "sent_count": 0,
+                "sent_count": sent_count,
                 "pending_count": 0,
-                "message": "没有待推送通知。",
+                "message": "QQ 推送成功。",
             }
-        target = self.get_target_umo()
-        if not target:
-            return {
-                "sent_count": 0,
-                "pending_count": len(pending),
-                "message": "尚未绑定 QQ 私聊目标。",
-            }
-        text = self._format_push(pending)
-        try:
-            sent = await self.send_message(target, text)
-        except Exception as exc:
-            return {
-                "sent_count": 0,
-                "pending_count": len(pending),
-                "message": f"QQ 发送失败：{exc}",
-            }
-        if not sent:
-            return {
-                "sent_count": 0,
-                "pending_count": len(pending),
-                "message": "AstrBot 未找到目标会话的平台适配器。",
-            }
-        self.repository.mark_delivered([str(row["notice_id"]) for row in pending])
-        return {
-            "sent_count": len(pending),
-            "pending_count": 0,
-            "message": "QQ 推送成功。",
-        }
 
-    def search(self, keyword: str) -> dict[str, Any]:
+    def search(
+        self,
+        keyword: str,
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         keyword = keyword.strip()
         if not keyword:
             return self._result(
@@ -173,12 +206,92 @@ class NoticeService:
                 "请提供要检索的正文关键词。",
                 error_code="KEYWORD_REQUIRED",
             )
-        limit = min(50, max(1, int(self.config.get("search_limit", 10))))
-        rows = self.repository.search_content(keyword, limit)
+        validation = self._validate_query(start_date, end_date, limit, offset)
+        if validation:
+            return validation
+        result = self.repository.query_notices(
+            keyword=keyword,
+            content_only=True,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        )
+        items = [self._search_item(row, keyword) for row in result["rows"]]
+        total = result["total_count"]
         return self._result(
             True,
-            f"在本地正文缓存中找到 {len(rows)} 条匹配通知。",
-            data=rows,
+            f"正文共有 {total} 条匹配，本页返回 {len(items)} 条。",
+            data={
+                "query": {
+                    "keyword": keyword,
+                    "scope": "content",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                "total_count": total,
+                "returned_count": len(items),
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(items) < total,
+                "items": items,
+            },
+        )
+
+    def list_notices(
+        self,
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        validation = self._validate_query(start_date, end_date, limit, offset)
+        if validation:
+            return validation
+        result = self.repository.query_notices(
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        )
+        items = [self._summary(row) for row in result["rows"]]
+        total = result["total_count"]
+        return self._result(
+            True,
+            f"指定范围共有 {total} 条通知，本页返回 {len(items)} 条。",
+            data={
+                "query": {"start_date": start_date, "end_date": end_date},
+                "total_count": total,
+                "returned_count": len(items),
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(items) < total,
+                "items": items,
+            },
+        )
+
+    def statistics(self, start_date: str = "", end_date: str = "") -> dict[str, Any]:
+        validation = self._validate_query(start_date, end_date, 1, 0)
+        if validation:
+            return validation
+        data = self.repository.statistics(start_date, end_date)
+        data.update(
+            {
+                "requested_start_date": start_date,
+                "requested_end_date": end_date,
+                "coverage_since_date": self.repository.get_setting(
+                    "coverage_since_date"
+                ),
+                "last_successful_sync": self.repository.get_setting(
+                    "last_successful_sync"
+                ),
+            }
+        )
+        return self._result(
+            True,
+            f"本地通知库共有 {data['total_count']} 条记录，"
+            f"日期范围 {data['earliest_date'] or '无'} 至 {data['latest_date'] or '无'}。",
+            data=data,
         )
 
     def status(self) -> dict[str, Any]:
@@ -196,6 +309,74 @@ class NoticeService:
             }
         )
         return status
+
+    def _validate_query(
+        self, start_date: str, end_date: str, limit: int, offset: int
+    ) -> dict[str, Any] | None:
+        for label, value in (("开始日期", start_date), ("结束日期", end_date)):
+            if not value:
+                continue
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                return self._result(
+                    False,
+                    f"{label}必须使用 YYYY-MM-DD 格式。",
+                    error_code="INVALID_QUERY_DATE",
+                )
+        if start_date and end_date and start_date > end_date:
+            return self._result(
+                False,
+                "开始日期不能晚于结束日期。",
+                error_code="INVALID_DATE_RANGE",
+            )
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 50
+        ):
+            return self._result(
+                False,
+                "limit 必须在 1 到 50 之间。",
+                error_code="INVALID_LIMIT",
+            )
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or not 0 <= offset <= 10000
+        ):
+            return self._result(
+                False,
+                "offset 必须在 0 到 10000 之间。",
+                error_code="INVALID_OFFSET",
+            )
+        return None
+
+    @staticmethod
+    def _summary(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "notice_id": str(row.get("notice_id") or row.get("id") or ""),
+            "title": str(row.get("title") or ""),
+            "published_date": str(row.get("published_date") or ""),
+            "author": str(row.get("author") or ""),
+            "url": str(row.get("url") or ""),
+            "links": list(row.get("links") or []),
+        }
+
+    @classmethod
+    def _search_item(cls, row: dict[str, Any], keyword: str) -> dict[str, Any]:
+        item = cls._summary(row)
+        content = " ".join(str(row.get("content") or "").split())
+        position = content.casefold().find(keyword.casefold())
+        start = max(0, position - 100) if position >= 0 else 0
+        end = min(len(content), position + len(keyword) + 160) if position >= 0 else 260
+        excerpt = content[start:end]
+        if start:
+            excerpt = "…" + excerpt
+        if end < len(content):
+            excerpt += "…"
+        item["matched_excerpt"] = excerpt
+        return item
 
     @staticmethod
     def _format_push(rows: list[dict[str, Any]]) -> str:

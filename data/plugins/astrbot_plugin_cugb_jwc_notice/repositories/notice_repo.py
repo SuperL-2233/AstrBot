@@ -87,6 +87,18 @@ class NoticeRepository:
         complete = {str(row["notice_id"]) for row in found}
         return set(ids) - complete
 
+    def missing_detail_summaries(self, limit: int) -> list[dict[str, str]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT notice_id AS id, title, published_date, url
+                   FROM notices
+                   WHERE content = ''
+                   ORDER BY published_date DESC, notice_id DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def sync_state(self, *, include_ids: bool = True) -> dict[str, Any]:
         with self._connect() as connection:
             row = connection.execute(
@@ -236,17 +248,89 @@ class NoticeRepository:
                 [self._now(), *notice_ids],
             )
 
-    def search_content(self, keyword: str, limit: int) -> list[dict[str, Any]]:
-        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    @staticmethod
+    def _escaped_like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def query_notices(
+        self,
+        *,
+        keyword: str = "",
+        content_only: bool = False,
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        conditions: list[str] = []
+        parameters: list[Any] = []
+        if keyword:
+            pattern = f"%{self._escaped_like(keyword)}%"
+            if content_only:
+                conditions.append("content LIKE ? ESCAPE '\\'")
+                parameters.append(pattern)
+            else:
+                conditions.append(
+                    "(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')"
+                )
+                parameters.extend([pattern, pattern])
+        if start_date:
+            conditions.append("published_date >= ?")
+            parameters.append(start_date)
+        if end_date:
+            conditions.append("published_date <= ?")
+            parameters.append(end_date)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self._connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM notices {where}", parameters
+                ).fetchone()[0]
+            )
             rows = connection.execute(
-                """SELECT * FROM notices
-                   WHERE content LIKE ? ESCAPE '\\'
-                   ORDER BY published_date DESC, notice_id DESC
-                   LIMIT ?""",
-                (f"%{escaped}%", limit),
+                f"""SELECT * FROM notices {where}
+                    ORDER BY published_date DESC, notice_id DESC
+                    LIMIT ? OFFSET ?""",
+                [*parameters, limit, offset],
             ).fetchall()
-        return [self._decode_row(row) for row in rows]
+        return {"total_count": total, "rows": [self._decode_row(row) for row in rows]}
+
+    def statistics(self, start_date: str = "", end_date: str = "") -> dict[str, Any]:
+        conditions: list[str] = []
+        parameters: list[str] = []
+        if start_date:
+            conditions.append("published_date >= ?")
+            parameters.append(start_date)
+        if end_date:
+            conditions.append("published_date <= ?")
+            parameters.append(end_date)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        with self._connect() as connection:
+            summary = connection.execute(
+                f"""SELECT COUNT(*) AS total_count,
+                            SUM(CASE WHEN content <> '' THEN 1 ELSE 0 END)
+                                AS with_content_count,
+                            MIN(published_date) AS earliest_date,
+                            MAX(published_date) AS latest_date
+                     FROM notices {where}""",
+                parameters,
+            ).fetchone()
+            months = connection.execute(
+                f"""SELECT SUBSTR(published_date, 1, 7) AS month, COUNT(*) AS count
+                     FROM notices {where}
+                     GROUP BY month ORDER BY month""",
+                parameters,
+            ).fetchall()
+        total = int(summary["total_count"] or 0)
+        with_content = int(summary["with_content_count"] or 0)
+        return {
+            "total_count": total,
+            "with_content_count": with_content,
+            "missing_content_count": total - with_content,
+            "earliest_date": str(summary["earliest_date"] or ""),
+            "latest_date": str(summary["latest_date"] or ""),
+            "monthly_counts": [dict(row) for row in months],
+        }
 
     def status(self) -> dict[str, Any]:
         with self._connect() as connection:

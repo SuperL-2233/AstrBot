@@ -56,7 +56,12 @@
   },
   "search_limit": {
     "type": "int",
-    "description": "正文关键词检索最大返回条数",
+    "description": "命令查询默认的每页返回条数",
     "default": 10
+  },
+  "detail_retry_limit": {
+    "type": "int",
+    "description": "每次同步最多单独重试的缺失正文条数",
+    "default": 20
   }
 }

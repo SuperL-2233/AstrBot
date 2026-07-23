@@ -16,6 +16,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "target_umo": "",
     "owner_qq_id": "",
     "search_limit": 10,
+    "detail_retry_limit": 20,
 }
 
 
