@@ -85,7 +85,12 @@ astrbot = "astrbot.cli.__main__:cli"
 Repository = "https://github.com/AstrBotDevs/AstrBot"
 
 [tool.ruff]
-exclude = ["astrbot/core/utils/t2i/local_strategy.py", "astrbot/api/all.py", "tests"]
+exclude = [
+  "astrbot/core/utils/t2i/local_strategy.py",
+  "astrbot/api/all.py",
+  "tests",
+  "data/plugins/astrbot_plugin_chaoxing_deadline/providers/vendor",
+]
 line-length = 88
 target-version = "py310"
 

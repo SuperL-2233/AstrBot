@@ -1,0 +1,47 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "是否启用超星在线同步",
+    "default": false
+  },
+  "phone": {
+    "type": "string",
+    "description": "学习通登录手机号（仅保存在 AstrBot 运行时配置）",
+    "default": ""
+  },
+  "password": {
+    "type": "string",
+    "description": "学习通密码（仅保存在 AstrBot 运行时配置）",
+    "default": ""
+  },
+  "owner_qq_id": {
+    "type": "string",
+    "description": "允许查询和绑定提醒的 QQ 用户 ID",
+    "default": ""
+  },
+  "database": {
+    "type": "string",
+    "description": "独立的任务与提醒状态数据库文件名",
+    "default": "chaoxing_deadlines.sqlite"
+  },
+  "timeout_seconds": {
+    "type": "int",
+    "description": "单个学习通请求超时秒数",
+    "default": 20
+  },
+  "refresh_interval_minutes": {
+    "type": "int",
+    "description": "在线同步及提醒扫描间隔（分钟）",
+    "default": 120
+  },
+  "reminder_enabled": {
+    "type": "bool",
+    "description": "是否启用截止提醒",
+    "default": true
+  },
+  "remind_before_hours": {
+    "type": "int",
+    "description": "在截止前多少小时进入提醒窗口",
+    "default": 24
+  }
+}

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.sqlite
+*.db
+cookies.json
+outputs/
+reference/

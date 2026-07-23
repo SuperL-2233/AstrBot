@@ -127,38 +127,6 @@
         "type": "int",
         "description": "课前提醒时间",
         "default": 20
-      },
-      "enable_homework_reminder": {
-        "type": "bool",
-        "description": "是否启用作业提醒",
-        "default": true
-      }
-    }
-  },
-  "chaoxing": {
-    "type": "object",
-    "description": "学习通配置",
-    "items": {
-      "enable": {
-        "type": "bool",
-        "description": "是否启用学习通",
-        "default": false
-      },
-      "provider": {
-        "type": "string",
-        "description": "学习通数据来源",
-        "default": "disabled",
-        "options": ["cache", "disabled"]
-      },
-      "database": {
-        "type": "string",
-        "description": "作业缓存数据库文件名",
-        "default": "homework.sqlite"
-      },
-      "update_interval_minutes": {
-        "type": "int",
-        "description": "作业刷新间隔（分钟）",
-        "default": 120
       }
     }
   },

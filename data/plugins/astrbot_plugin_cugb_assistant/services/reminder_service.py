@@ -10,9 +10,6 @@ class ReminderService:
         return {
             "enabled": True,
             "class_reminder_enabled": reminder_cfg.get("enable_class_reminder", True),
-            "homework_reminder_enabled": reminder_cfg.get(
-                "enable_homework_reminder", True
-            ),
             "before_class_minutes": reminder_cfg.get("before_class_minutes", 20),
             "job_loaded": False,
             "message": "课前提醒模块已加载，但提醒任务尚未启用。",

@@ -35,13 +35,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reminder": {
         "enable_class_reminder": True,
         "before_class_minutes": 20,
-        "enable_homework_reminder": True,
-    },
-    "chaoxing": {
-        "enable": False,
-        "provider": "disabled",
-        "database": "homework.sqlite",
-        "update_interval_minutes": 120,
     },
     "llm": {
         "enable_tools": True,

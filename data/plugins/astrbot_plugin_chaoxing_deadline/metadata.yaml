@@ -1,0 +1,7 @@
+name: astrbot_plugin_chaoxing_deadline
+display_name: 超星学习通截止提醒
+author: macroladlezilla
+description: 只读同步超星学习通作业、视频章节和讨论，并查询或推送明确的截止时间。
+short_desc: 学习通任务截止查询与提醒。
+version: 0.1.0
+repo: https://github.com/macroladlezilla/astrbot_plugin_chaoxing_deadline

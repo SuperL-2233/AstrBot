@@ -14,7 +14,6 @@ from astrbot_plugin_cugb_assistant.providers.classroom_mportal_provider import (
 )
 from astrbot_plugin_cugb_assistant.repositories.classroom_repo import ClassroomRepository
 from astrbot_plugin_cugb_assistant.repositories.course_repo import CourseRepository
-from astrbot_plugin_cugb_assistant.services.chaoxing_service import ChaoxingService
 from astrbot_plugin_cugb_assistant.services.classroom_service import ClassroomService
 from astrbot_plugin_cugb_assistant.services.course_service import CourseService
 from astrbot_plugin_cugb_assistant.utils.config_loader import load_plugin_config
@@ -40,16 +39,6 @@ async def test_classroom_service_disabled_returns_clear_message(tmp_path):
 
     assert result["success"] is False
     assert result["error_code"] == "CLASSROOM_SOURCE_NOT_CONFIGURED"
-
-
-@pytest.mark.asyncio
-async def test_chaoxing_service_disabled_returns_clear_message():
-    service = ChaoxingService(load_plugin_config(None), provider=None)
-
-    result = await service.get_pending_homework()
-
-    assert result["success"] is False
-    assert result["error_code"] == "CHAOXING_NOT_ENABLED"
 
 
 def test_mportal_provider_resolves_sections_and_filters_occupied_rooms():
