@@ -34,6 +34,16 @@
     "description": "查询前允许使用本地缓存的最长小时数；超时会先尝试云端同步",
     "default": 24
   },
+  "sync_lease_minutes": {
+    "type": "int",
+    "description": "跨热重载同步锁的最长占用时间（分钟）",
+    "default": 30
+  },
+  "antispider_cooldown_hours": {
+    "type": "int",
+    "description": "检测到超星 403 反爬提示后的停止访问时间（小时）",
+    "default": 12
+  },
   "reminder_enabled": {
     "type": "bool",
     "description": "是否启用截止提醒",

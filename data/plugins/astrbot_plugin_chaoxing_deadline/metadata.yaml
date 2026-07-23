@@ -1,7 +1,7 @@
 name: astrbot_plugin_chaoxing_deadline
 display_name: 超星学习通助手
 author: macroladlezilla
-description: 只读同步并查询超星学习通任务，维护 24 小时缓存和所有带截止时间项目的多阶段提醒计划。
+description: 只读同步并查询超星学习通任务，提供缓存、同步防重、反爬冷却和多阶段提醒计划。
 short_desc: 学习通任务查询、缓存与多阶段截止提醒。
-version: 0.4.0
+version: 0.4.1
 repo: https://github.com/macroladlezilla/astrbot_plugin_chaoxing_deadline

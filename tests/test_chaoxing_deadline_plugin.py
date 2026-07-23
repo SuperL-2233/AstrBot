@@ -1,8 +1,10 @@
+import asyncio
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-import sys
 
 import pytest
+import requests
 
 
 PLUGIN_PARENT = Path(__file__).resolve().parents[1] / "data" / "plugins"
@@ -98,6 +100,144 @@ def test_only_reminder_binding_requires_private_chat():
             return False
 
     assert "私聊" in ensure_private_chat(Event())
+
+
+def test_repository_sync_lease_and_backoff_are_shared_across_instances(tmp_path):
+    path = tmp_path / "tasks.sqlite"
+    first = TaskRepository(path)
+    second = TaskRepository(path)
+    base = datetime.now().replace(microsecond=0)
+
+    assert first.claim_sync_lease("first", lease_minutes=30, now=base) is True
+    assert second.claim_sync_lease("second", lease_minutes=30, now=base) is False
+    second.release_sync_lease("second")
+    assert first.sync_guard_state(base)["lease_active"] is True
+    first.release_sync_lease("first")
+    assert second.claim_sync_lease("second", lease_minutes=30, now=base) is True
+    second.release_sync_lease("second")
+
+    first.set_sync_backoff(base + timedelta(hours=12), "反爬测试")
+    guard = second.sync_guard_state(base)
+    assert guard["backoff_active"] is True
+    assert guard["backoff_reason"] == "反爬测试"
+    second.clear_sync_backoff()
+    assert first.sync_guard_state(base)["backoff_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_antispider_stops_after_first_course_and_persists_backoff(
+    tmp_path, monkeypatch
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider(
+        {
+            "phone": "p",
+            "password": "s",
+            "timeout_seconds": 20,
+            "antispider_cooldown_hours": 12,
+        },
+        repository,
+    )
+    api = provider_module.chaoxing_api
+    calls = 0
+
+    async def inline_to_thread(function, *args):
+        return function(*args)
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", inline_to_thread)
+    monkeypatch.setattr(api, "create_session", lambda: object())
+    monkeypatch.setattr(api, "login", lambda *_args: "uid")
+    monkeypatch.setattr(
+        api,
+        "get_courses",
+        lambda *_args: [
+            {"name": f"课程{index}", "courseId": str(index), "classId": "1", "url": "u"}
+            for index in range(30)
+        ],
+    )
+
+    def reject(*_args):
+        nonlocal calls
+        calls += 1
+        response = type(
+            "Response",
+            (),
+            {"url": "https://mooc1.chaoxing.com/antispiderShowMsg.ac"},
+        )()
+        raise requests.HTTPError("403", response=response)
+
+    monkeypatch.setattr(api, "get_course_context", reject)
+
+    first = await provider.refresh()
+    second = await provider.refresh()
+
+    assert first["error_code"] == "CHAOXING_ANTISPIDER_DETECTED"
+    assert second["error_code"] == "CHAOXING_ANTISPIDER_BACKOFF"
+    assert calls == 1
+    assert repository.sync_guard_state()["backoff_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_antispider_on_course_list_also_starts_backoff(tmp_path, monkeypatch):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider(
+        {"phone": "p", "password": "s", "antispider_cooldown_hours": 12},
+        repository,
+    )
+    api = provider_module.chaoxing_api
+
+    async def inline_to_thread(function, *args):
+        return function(*args)
+
+    def reject(*_args):
+        response = type(
+            "Response",
+            (),
+            {"url": "https://mooc1.chaoxing.com/antispiderShowMsg.ac"},
+        )()
+        raise requests.HTTPError("403", response=response)
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", inline_to_thread)
+    monkeypatch.setattr(api, "create_session", lambda: object())
+    monkeypatch.setattr(api, "login", lambda *_args: "uid")
+    monkeypatch.setattr(api, "get_courses", reject)
+
+    result = await provider.refresh()
+
+    assert result["error_code"] == "CHAOXING_ANTISPIDER_DETECTED"
+    assert repository.sync_guard_state()["backoff_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_refresh_waits_for_worker_and_releases_lease(
+    tmp_path, monkeypatch
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider({"phone": "p", "password": "s"}, repository)
+    worker_started = asyncio.Event()
+    worker_release = asyncio.Event()
+
+    async def controlled_to_thread(_function, *_args):
+        worker_started.set()
+        await worker_release.wait()
+        return {"course_count": 0, "task_count": 0, "partial_error_count": 0}
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", controlled_to_thread)
+    refresh_task = asyncio.create_task(provider.refresh())
+    await worker_started.wait()
+    refresh_task.cancel()
+    await asyncio.sleep(0)
+
+    refresh_cancelled = refresh_task.done()
+    lease_held_while_worker_runs = repository.sync_guard_state()["lease_active"]
+    worker_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(refresh_task, timeout=2)
+    await asyncio.wait_for(provider.wait_for_worker(), timeout=2)
+
+    assert refresh_cancelled is True
+    assert lease_held_while_worker_runs is True
+    assert repository.sync_guard_state()["lease_active"] is False
 
 
 @pytest.mark.asyncio

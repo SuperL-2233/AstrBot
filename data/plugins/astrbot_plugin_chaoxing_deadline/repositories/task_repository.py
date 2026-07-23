@@ -207,6 +207,109 @@ class TaskRepository:
             "age_hours": round(age_hours, 2),
         }
 
+    @staticmethod
+    def _parse_timestamp(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+    def sync_guard_state(self, now: datetime | None = None) -> dict:
+        current = now or datetime.now()
+        with self._connect() as connection:
+            values = {
+                row["key"]: row["value"]
+                for row in connection.execute(
+                    """
+                    SELECT key, value FROM settings
+                    WHERE key IN (
+                        'sync_lease_owner', 'sync_lease_until',
+                        'sync_backoff_until', 'sync_backoff_reason'
+                    )
+                    """
+                ).fetchall()
+            }
+        lease_until = self._parse_timestamp(values.get("sync_lease_until"))
+        backoff_until = self._parse_timestamp(values.get("sync_backoff_until"))
+        return {
+            "lease_active": bool(lease_until and lease_until > current),
+            "lease_until": values.get("sync_lease_until") or None,
+            "backoff_active": bool(backoff_until and backoff_until > current),
+            "backoff_until": values.get("sync_backoff_until") or None,
+            "backoff_reason": values.get("sync_backoff_reason") or "",
+        }
+
+    def claim_sync_lease(
+        self,
+        owner: str,
+        lease_minutes: int = 30,
+        now: datetime | None = None,
+    ) -> bool:
+        current = now or datetime.now()
+        lease_until = current + timedelta(minutes=max(1, lease_minutes))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = {
+                row["key"]: row["value"]
+                for row in connection.execute(
+                    """
+                    SELECT key, value FROM settings
+                    WHERE key IN ('sync_lease_owner', 'sync_lease_until')
+                    """
+                ).fetchall()
+            }
+            active_until = self._parse_timestamp(rows.get("sync_lease_until"))
+            if (
+                active_until
+                and active_until > current
+                and rows.get("sync_lease_owner") != owner
+            ):
+                return False
+            for key, value in (
+                ("sync_lease_owner", owner),
+                ("sync_lease_until", lease_until.strftime("%Y-%m-%d %H:%M:%S")),
+            ):
+                connection.execute(
+                    """
+                    INSERT INTO settings(key, value) VALUES(?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (key, value),
+                )
+        return True
+
+    def release_sync_lease(self, owner: str) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = 'sync_lease_owner'"
+            ).fetchone()
+            if row and row["value"] == owner:
+                connection.execute(
+                    "DELETE FROM settings WHERE key IN ('sync_lease_owner', 'sync_lease_until')"
+                )
+
+    def set_sync_backoff(self, until: datetime, reason: str) -> None:
+        with self._connect() as connection:
+            for key, value in (
+                ("sync_backoff_until", until.strftime("%Y-%m-%d %H:%M:%S")),
+                ("sync_backoff_reason", reason),
+            ):
+                connection.execute(
+                    """
+                    INSERT INTO settings(key, value) VALUES(?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (key, value),
+                )
+
+    def clear_sync_backoff(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM settings WHERE key IN ('sync_backoff_until', 'sync_backoff_reason')"
+            )
+
     def sync_reminder_schedule(
         self, offsets_hours: list[int], now: datetime | None = None
     ) -> int:

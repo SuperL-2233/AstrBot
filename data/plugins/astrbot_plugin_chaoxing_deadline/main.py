@@ -22,7 +22,7 @@ from .utils.permission import ensure_private_chat
     "astrbot_plugin_chaoxing_deadline",
     "macroladlezilla",
     "超星学习通助手",
-    "0.4.0",
+    "0.4.1",
 )
 class ChaoxingDeadlinePlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -57,6 +57,7 @@ class ChaoxingDeadlinePlugin(star.Star):
             self._refresh_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._refresh_task
+        await self.provider.wait_for_worker()
         if self._reminder_task:
             self._reminder_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -66,10 +67,11 @@ class ChaoxingDeadlinePlugin(star.Star):
         interval = max(5, int(self.config.get("refresh_interval_minutes", 120))) * 60
         while True:
             try:
-                result = await self.task_service.refresh()
-                if result["success"]:
+                freshness = await self.task_service.ensure_fresh()
+                result = freshness.get("refresh_result")
+                if result and result["success"]:
                     logger.info(result["message"])
-                else:
+                elif result:
                     logger.warning(result["message"])
             except Exception as exc:
                 logger.warning(f"Chaoxing refresh loop failed: {exc}")

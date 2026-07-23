@@ -11,6 +11,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "timeout_seconds": 20,
     "refresh_interval_minutes": 120,
     "cache_max_age_hours": 24,
+    "sync_lease_minutes": 30,
+    "antispider_cooldown_hours": 12,
     "reminder_enabled": True,
     "reminder_offsets_hours": [168, 120, 72, 24, 5, 2, 1],
     "reminder_scan_interval_minutes": 5,

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 
 import requests
 
 from ..repositories.task_repository import TaskRepository
 from .vendor import chaoxing_api
+
+
+class ChaoxingAntiSpiderError(RuntimeError):
+    """Chaoxing rejected the scripted session before course parsing."""
 
 
 class ChaoxingProvider:
@@ -21,6 +26,67 @@ class ChaoxingProvider:
         self.repository = repository
         self.last_error = ""
         self.partial_errors: list[str] = []
+        self._session: requests.Session | None = None
+        self._lease_owner = uuid.uuid4().hex
+        self._worker_task: asyncio.Task | None = None
+
+    @staticmethod
+    def _is_antispider_error(exc: Exception) -> bool:
+        response = getattr(exc, "response", None)
+        response_url = str(getattr(response, "url", ""))
+        return "antispiderShowMsg" in response_url or "antispiderShowMsg" in str(exc)
+
+    @classmethod
+    def _raise_if_antispider(cls, exc: Exception) -> None:
+        if cls._is_antispider_error(exc):
+            raise ChaoxingAntiSpiderError(
+                "超星返回 403 反爬提示：我们发现您的访问有异常，请联系客服"
+            ) from exc
+
+    def _record_antispider_backoff(self, exc: Exception) -> ChaoxingAntiSpiderError:
+        error = (
+            exc
+            if isinstance(exc, ChaoxingAntiSpiderError)
+            else ChaoxingAntiSpiderError(
+                "超星返回 403 反爬提示：我们发现您的访问有异常，请联系客服"
+            )
+        )
+        self._session = None
+        self.last_error = str(error)
+        cooldown_hours = max(1, int(self.config.get("antispider_cooldown_hours", 12)))
+        self.repository.set_sync_backoff(
+            datetime.now() + timedelta(hours=cooldown_hours), self.last_error
+        )
+        return error
+
+    async def _run_leased_worker(self, phone: str, password: str) -> dict:
+        try:
+            return await asyncio.to_thread(self._refresh_sync, phone, password)
+        except ChaoxingAntiSpiderError as exc:
+            raise self._record_antispider_backoff(exc)
+        except requests.RequestException as exc:
+            if self._is_antispider_error(exc):
+                raise self._record_antispider_backoff(exc) from exc
+            raise
+        finally:
+            self.repository.release_sync_lease(self._lease_owner)
+
+    async def wait_for_worker(self) -> None:
+        """Wait for a detached sync worker before a plugin instance is unloaded."""
+        worker = self._worker_task
+        if worker:
+            try:
+                await worker
+            except (
+                asyncio.CancelledError,
+                requests.RequestException,
+                RuntimeError,
+                ValueError,
+                KeyError,
+            ):
+                pass
+        if self._worker_task is worker:
+            self._worker_task = None
 
     async def refresh(self) -> dict:
         phone = str(self.config.get("phone", "")).strip()
@@ -32,8 +98,49 @@ class ChaoxingProvider:
                 "message": "请先在插件运行时配置中填写学习通手机号和密码。",
                 "error_code": "CHAOXING_CREDENTIALS_MISSING",
             }
+        if self._worker_task and not self._worker_task.done():
+            return {
+                "success": False,
+                "data": None,
+                "message": "当前插件实例已有超星同步正在运行。",
+                "error_code": "CHAOXING_SYNC_IN_PROGRESS",
+            }
+        guard = self.repository.sync_guard_state()
+        if guard["backoff_active"]:
+            self.last_error = guard["backoff_reason"]
+            return {
+                "success": False,
+                "data": None,
+                "message": (
+                    f"超星同步处于反爬冷却期，{guard['backoff_until']} 前不会访问云端。"
+                    f"原因：{guard['backoff_reason']}"
+                ),
+                "error_code": "CHAOXING_ANTISPIDER_BACKOFF",
+            }
+        lease_minutes = max(5, int(self.config.get("sync_lease_minutes", 30)))
+        if not self.repository.claim_sync_lease(self._lease_owner, lease_minutes):
+            guard = self.repository.sync_guard_state()
+            return {
+                "success": False,
+                "data": None,
+                "message": f"已有超星同步正在运行，锁定至 {guard['lease_until']}。",
+                "error_code": "CHAOXING_SYNC_IN_PROGRESS",
+            }
         try:
-            data = await asyncio.to_thread(self._refresh_sync, phone, password)
+            self._worker_task = asyncio.create_task(
+                self._run_leased_worker(phone, password)
+            )
+            data = await asyncio.shield(self._worker_task)
+        except ChaoxingAntiSpiderError as exc:
+            cooldown_hours = max(
+                1, int(self.config.get("antispider_cooldown_hours", 12))
+            )
+            return {
+                "success": False,
+                "data": None,
+                "message": (f"超星同步已停止并进入 {cooldown_hours} 小时冷却期：{exc}"),
+                "error_code": "CHAOXING_ANTISPIDER_DETECTED",
+            }
         except (requests.RequestException, RuntimeError, ValueError, KeyError) as exc:
             self.last_error = str(exc)
             return {
@@ -42,7 +149,11 @@ class ChaoxingProvider:
                 "message": f"超星同步失败：{exc}",
                 "error_code": "CHAOXING_REFRESH_FAILED",
             }
+        finally:
+            if self._worker_task and self._worker_task.done():
+                self._worker_task = None
         self.last_error = ""
+        self.repository.clear_sync_backoff()
         return {
             "success": True,
             "data": data,
@@ -68,9 +179,20 @@ class ChaoxingProvider:
             requests.RequestException: If login or course-list requests fail.
         """
         timeout = max(5.0, float(self.config.get("timeout_seconds", 20)))
-        session = chaoxing_api.create_session()
-        chaoxing_api.login(session, phone, password, timeout)
-        courses = chaoxing_api.get_courses(session, timeout)
+        session = self._session
+        if session is None:
+            session = chaoxing_api.create_session()
+            chaoxing_api.login(session, phone, password, timeout)
+            self._session = session
+        try:
+            courses = chaoxing_api.get_courses(session, timeout)
+        except RuntimeError as exc:
+            if "Cookie" not in str(exc) and "登录页" not in str(exc):
+                raise
+            session = chaoxing_api.create_session()
+            chaoxing_api.login(session, phone, password, timeout)
+            self._session = session
+            courses = chaoxing_api.get_courses(session, timeout)
         refreshed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tasks: list[dict] = []
         errors: list[str] = []
@@ -87,6 +209,7 @@ class ChaoxingProvider:
                 ValueError,
                 KeyError,
             ) as exc:
+                self._raise_if_antispider(exc)
                 errors.append(f"{course['name']}：课程主页读取失败（{exc}）")
                 continue
             processed_courses += 1
@@ -128,6 +251,7 @@ class ChaoxingProvider:
                 ValueError,
                 KeyError,
             ) as exc:
+                self._raise_if_antispider(exc)
                 errors.append(f"{course['name']}：视频章节读取失败（{exc}）")
 
             try:
@@ -143,6 +267,7 @@ class ChaoxingProvider:
                 ValueError,
                 KeyError,
             ) as exc:
+                self._raise_if_antispider(exc)
                 errors.append(f"{course['name']}：作业读取失败（{exc}）")
 
             try:
@@ -158,6 +283,7 @@ class ChaoxingProvider:
                 ValueError,
                 KeyError,
             ) as exc:
+                self._raise_if_antispider(exc)
                 errors.append(f"{course['name']}：讨论读取失败（{exc}）")
 
             for item in course_items:
@@ -195,6 +321,7 @@ class ChaoxingProvider:
                 )
 
         if not processed_courses:
+            self.partial_errors = errors[-20:]
             raise RuntimeError("课程列表存在，但所有课程主页均读取失败；保留原缓存")
         self.repository.replace_tasks(tasks)
         self.partial_errors = errors[-20:]
@@ -206,6 +333,7 @@ class ChaoxingProvider:
 
     def status(self) -> dict:
         status = self.repository.status()
+        sync_guard = self.repository.sync_guard_state()
         status.update(
             {
                 "enabled": bool(self.config.get("enabled", False)),
@@ -213,9 +341,10 @@ class ChaoxingProvider:
                     str(self.config.get("phone", "")).strip()
                     and str(self.config.get("password", ""))
                 ),
-                "last_error": self.last_error,
+                "last_error": self.last_error or sync_guard["backoff_reason"],
                 "partial_error_count": len(self.partial_errors),
                 "source": self.SOURCE,
+                "sync_guard": sync_guard,
             }
         )
         return status
