@@ -15,7 +15,7 @@ from .utils.permission_utils import ensure_owner_private_access
     "astrbot_plugin_agent_completion_notifier",
     "macroladlezilla",
     "开发工具结束通知",
-    "0.1.0",
+    "0.1.1",
 )
 class AgentCompletionNotifierPlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -51,6 +51,21 @@ class AgentCompletionNotifierPlugin(star.Star):
             )
 
         return await self.notification_service.deliver(payload, send)
+
+    def get_public_capabilities(self) -> dict:
+        """Describe notifier features using the project plugin contract."""
+        return {
+            "summary": "接收 Codex/OpenCode 完成事件并推送到绑定私聊。",
+            "features": ["开发工具完成事件接收", "QQ 私聊主动通知"],
+            "commands": ["/开发通知状态", "/开发通知绑定", "/开发通知解绑"],
+            "llm_tools": [],
+        }
+
+    def get_public_status(self) -> dict:
+        """Return notifier state for the capability registry."""
+        status = self.notification_service.get_status()
+        status["listener_running"] = self.webhook_provider.started
+        return status
 
     @filter.command("开发通知帮助")
     async def help_command(self, event: AstrMessageEvent):

@@ -29,6 +29,8 @@ data/plugins/*
 !data/plugins/astrbot_plugin_agent_completion_notifier/**
 !data/plugins/astrbot_plugin_chaoxing_deadline/
 !data/plugins/astrbot_plugin_chaoxing_deadline/**
+!data/plugins/astrbot_plugin_capability_registry/
+!data/plugins/astrbot_plugin_capability_registry/**
 configs/session
 configs/config.yaml
 cmd_config.json

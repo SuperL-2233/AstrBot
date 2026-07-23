@@ -97,10 +97,17 @@ class TaskRepository:
         return len(tasks)
 
     def query_tasks(
-        self, task_type: str = "", keyword: str = "", limit: int = 50
+        self,
+        task_type: str = "",
+        keyword: str = "",
+        task_status: str = "pending",
+        limit: int = 50,
     ) -> list[dict]:
-        clauses = ["status = 'pending'"]
+        clauses: list[str] = []
         params: list[str | int] = []
+        if task_status:
+            clauses.append("status = ?")
+            params.append(task_status)
         if task_type:
             clauses.append("task_type = ?")
             params.append(task_type)
@@ -110,8 +117,8 @@ class TaskRepository:
         params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM tasks WHERE "
-                + " AND ".join(clauses)
+                "SELECT * FROM tasks"
+                + (" WHERE " + " AND ".join(clauses) if clauses else "")
                 + " ORDER BY CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END, deadline, course_name LIMIT ?",
                 params,
             ).fetchall()
@@ -166,9 +173,16 @@ class TaskRepository:
             row = connection.execute(
                 "SELECT value FROM settings WHERE key = 'last_sync_time'"
             ).fetchone()
+            status_counts = {
+                row["status"]: int(row["count"])
+                for row in connection.execute(
+                    "SELECT status, COUNT(*) AS count FROM tasks GROUP BY status"
+                ).fetchall()
+            }
         return {
             "count": sum(counts.values()),
             "counts": counts,
+            "status_counts": status_counts,
             "last_update_time": row["value"] if row else None,
         }
 

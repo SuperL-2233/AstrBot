@@ -1,0 +1,7 @@
+name: astrbot_plugin_capability_registry
+display_name: 插件能力注册表
+author: macroladlezilla
+description: 统一枚举 AstrBot 已注册插件及其自愿公开的功能、命令、LLM 工具和运行状态。
+short_desc: 统一插件能力与状态查询。
+version: 0.1.0
+repo: https://github.com/macroladlezilla/astrbot_plugin_capability_registry

@@ -23,15 +23,20 @@ from astrbot_plugin_chaoxing_deadline.utils.config_loader import load_plugin_con
 from astrbot_plugin_chaoxing_deadline.utils.permission import ensure_private_chat
 
 
-def task(deadline: str, task_type: str = "作业") -> dict:
+def task(
+    deadline: str,
+    task_type: str = "作业",
+    status: str = "pending",
+    suffix: str = "",
+) -> dict:
     return {
-        "task_key": f"key-{task_type}",
+        "task_key": f"key-{task_type}-{status}-{suffix}",
         "course_name": "测试课程",
         "course_id": "10",
         "class_id": "20",
         "task_type": task_type,
-        "title": f"测试{task_type}",
-        "status": "pending",
+        "title": f"测试{task_type}{suffix}",
+        "status": status,
         "start_time": "",
         "deadline": deadline,
         "source_update_time": "2026-07-23 10:00:00",
@@ -56,7 +61,30 @@ def test_task_service_validates_type_and_deadline_window(tmp_path):
     service = TaskService(config, provider, repository)
 
     assert service.get_tasks("考试")["error_code"] == "INVALID_TASK_TYPE"
+    assert service.get_tasks(task_status="未知")["error_code"] == "INVALID_TASK_STATUS"
     assert service.get_deadlines(366)["error_code"] == "INVALID_WITHIN_DAYS"
+
+
+def test_task_queries_support_pending_completed_all_and_type_filters(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    repository.replace_tasks(
+        [
+            task("", "作业", "pending"),
+            task("", "作业", "completed"),
+            task("", "视频", "completed"),
+            task("", "讨论", "pending"),
+        ]
+    )
+    service = TaskService(
+        {"enabled": False}, ChaoxingProvider({}, repository), repository
+    )
+
+    assert len(service.get_tasks(task_status="待办")["data"]) == 2
+    assert len(service.get_tasks(task_status="已完成")["data"]) == 2
+    assert len(service.get_tasks(task_status="全部")["data"]) == 4
+    completed_homeworks = service.get_tasks("作业", task_status="已完成")["data"]
+    assert len(completed_homeworks) == 1
+    assert completed_homeworks[0]["status"] == "completed"
 
 
 def test_configuration_does_not_require_owner_qq_id():
@@ -172,7 +200,15 @@ def test_online_provider_normalizes_all_supported_types(tmp_path, monkeypatch):
                     "status": "未交",
                     "deadline": "2026-07-30 12:00:00",
                     "url": "h",
-                }
+                },
+                {
+                    "type": "作业",
+                    "name": "作业二",
+                    "item_id": "h2",
+                    "status": "已提交",
+                    "deadline": "2026-07-29 12:00:00",
+                    "url": "h2",
+                },
             ],
             "",
         ),
@@ -197,7 +233,7 @@ def test_online_provider_normalizes_all_supported_types(tmp_path, monkeypatch):
 
     result = provider._refresh_sync("p", "s")
 
-    assert result["task_count"] == 3
+    assert result["task_count"] == 4
     assert {row["task_type"] for row in repository.query_tasks()} == {
         "作业",
         "视频",
@@ -206,6 +242,9 @@ def test_online_provider_normalizes_all_supported_types(tmp_path, monkeypatch):
     video = repository.query_tasks("视频")[0]
     assert video["deadline"] == "2026-08-01 12:00:00"
     assert video["source"] == "SuperL-2233/chaoxing-api@554e01a"
+    completed = repository.query_tasks("作业", task_status="completed")
+    assert len(completed) == 1
+    assert completed[0]["title"] == "作业二"
 
 
 def test_upstream_parser_does_not_invent_a_missing_deadline():
@@ -219,40 +258,32 @@ def test_upstream_parser_does_not_invent_a_missing_deadline():
     )
 
 
+def test_expired_label_is_not_treated_as_completed():
+    assert not any(marker in "已截止" for marker in ChaoxingProvider.COMPLETED_MARKERS)
+
+
 @pytest.mark.asyncio
-async def test_aggregate_status_tool_reports_both_plugins():
-    class CugbPlugin:
-        @staticmethod
-        async def get_public_status() -> dict:
-            return {"course": {"count": 3}}
-
-    class Metadata:
-        activated = True
-        star_cls = CugbPlugin()
-
-    class Context:
-        @staticmethod
-        def get_registered_star(name: str):
-            return Metadata() if name == "astrbot_plugin_cugb_assistant" else None
-
+async def test_category_tools_query_completed_records():
     class TaskStatus:
         @staticmethod
-        def status() -> dict:
-            return {"enabled": True, "counts": {"作业": 2}}
-
-    class ReminderStatus:
-        @staticmethod
-        def status() -> dict:
-            return {"enabled": True, "target_bound": False, "before_hours": 24}
+        def get_tasks(task_type: str, keyword: str, task_status: str) -> dict:
+            return {
+                "success": True,
+                "data": {
+                    "type": task_type,
+                    "status": task_status,
+                    "keyword": keyword,
+                },
+            }
 
     plugin = object.__new__(ChaoxingDeadlinePlugin)
-    plugin.context = Context()
     plugin.task_service = TaskStatus()
-    plugin.reminder_service = ReminderStatus()
-    plugin._refresh_task = None
+    payload = __import__("json").loads(
+        await plugin.tool_get_chaoxing_homeworks(None, "已完成", "线性代数")
+    )
 
-    payload = __import__("json").loads(await plugin.tool_get_plugin_status(None))
-
-    assert payload["plugins"]["cugb_assistant"]["available"] is True
-    assert "空教室查询" in payload["plugins"]["cugb_assistant"]["capabilities"]
-    assert "学习通作业查询" in payload["plugins"]["chaoxing_deadline"]["capabilities"]
+    assert payload["data"] == {
+        "type": "作业",
+        "status": "已完成",
+        "keyword": "线性代数",
+    }

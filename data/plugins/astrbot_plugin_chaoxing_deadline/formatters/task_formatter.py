@@ -9,8 +9,10 @@ def format_tasks(result: dict, title: str) -> str:
     lines = [title]
     for index, task in enumerate(result["data"], 1):
         deadline = task.get("deadline") or "平台未提供明确截止时间"
+        status = "已完成" if task.get("status") == "completed" else "待办"
         lines.append(
-            f"{index}. [{task['task_type']}] {task['course_name']} - {task['title']}\n   截止：{deadline}"
+            f"{index}. [{task['task_type']}][{status}] "
+            f"{task['course_name']} - {task['title']}\n   截止：{deadline}"
         )
     return "\n".join(lines)
 

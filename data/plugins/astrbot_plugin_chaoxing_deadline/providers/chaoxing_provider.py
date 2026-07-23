@@ -13,7 +13,7 @@ from .vendor import chaoxing_api
 class ChaoxingProvider:
     """Synchronize read-only task data through the verified upstream API flow."""
 
-    COMPLETED_MARKERS = ("已完成", "已提交", "待批阅", "已批阅", "已结束", "已截止")
+    COMPLETED_MARKERS = ("已完成", "已提交", "待批阅", "已批阅")
     SOURCE = "SuperL-2233/chaoxing-api@554e01a"
 
     def __init__(self, config: dict, repository: TaskRepository) -> None:
