@@ -87,7 +87,36 @@ class NoticeRepository:
         complete = {str(row["notice_id"]) for row in found}
         return set(ids) - complete
 
-    def apply_snapshot(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def sync_state(self, *, include_ids: bool = True) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT MIN(published_date) AS earliest_date,
+                          MAX(published_date) AS latest_date,
+                          SUM(CASE WHEN content = '' THEN 1 ELSE 0 END) AS missing_count
+                   FROM notices"""
+            ).fetchone()
+            ids = (
+                {
+                    str(item["notice_id"])
+                    for item in connection.execute("SELECT notice_id FROM notices")
+                }
+                if include_ids
+                else set()
+            )
+            coverage_row = connection.execute(
+                "SELECT value FROM settings WHERE key = 'coverage_since_date'"
+            ).fetchone()
+        return {
+            "earliest_date": str(row["earliest_date"] or ""),
+            "latest_date": str(row["latest_date"] or ""),
+            "missing_detail_count": int(row["missing_count"] or 0),
+            "notice_ids": ids,
+            "coverage_since_date": str(coverage_row["value"]) if coverage_row else "",
+        }
+
+    def apply_snapshot(
+        self, rows: list[dict[str, Any]], *, coverage_since_date: str = ""
+    ) -> dict[str, Any]:
         now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -98,7 +127,18 @@ class NoticeRepository:
                 str(row["notice_id"])
                 for row in connection.execute("SELECT notice_id FROM notices")
             }
+            latest_existing_row = connection.execute(
+                "SELECT MAX(published_date) AS latest_date FROM notices"
+            ).fetchone()
+            latest_existing_date = str(latest_existing_row["latest_date"] or "")
             new_rows = [row for row in rows if str(row["id"]) not in existing]
+            notification_rows = [
+                row
+                for row in new_rows
+                if initialized
+                and latest_existing_date
+                and str(row["published_date"]) >= latest_existing_date
+            ]
             for row in rows:
                 detail_loaded = row.get("content") is not None
                 connection.execute(
@@ -135,7 +175,7 @@ class NoticeRepository:
                     ),
                 )
             if initialized:
-                for row in new_rows:
+                for row in notification_rows:
                     connection.execute(
                         """INSERT OR IGNORE INTO notification_deliveries(
                                notice_id, state, created_at
@@ -151,7 +191,22 @@ class NoticeRepository:
                    ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
                 (now,),
             )
-        return new_rows if initialized else []
+            if coverage_since_date:
+                connection.execute(
+                    """INSERT INTO settings(key, value)
+                       VALUES ('coverage_since_date', ?)
+                       ON CONFLICT(key) DO UPDATE SET value =
+                           CASE
+                               WHEN settings.value < excluded.value THEN settings.value
+                               ELSE excluded.value
+                           END""",
+                    (coverage_since_date,),
+                )
+        return {
+            "new_rows": new_rows if initialized else [],
+            "notification_rows": notification_rows if initialized else [],
+            "baseline_count": 0 if initialized else len(rows),
+        }
 
     @staticmethod
     def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -203,10 +258,14 @@ class NoticeRepository:
                     "SELECT COUNT(*) FROM notification_deliveries WHERE state = 'pending'"
                 ).fetchone()[0]
             )
+        sync_state = self.sync_state(include_ids=False)
         return {
             "notice_count": notice_count,
             "pending_notification_count": pending_count,
             "initialized": self.get_setting("initialized") == "1",
             "last_successful_sync": self.get_setting("last_successful_sync"),
             "target_bound": bool(self.get_setting("target_umo")),
+            "earliest_cached_date": sync_state["earliest_date"],
+            "latest_cached_date": sync_state["latest_date"],
+            "coverage_since_date": sync_state["coverage_since_date"],
         }

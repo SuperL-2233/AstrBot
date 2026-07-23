@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import date
 from typing import Any
 
 from ..providers.notice_provider import NoticeProvider
@@ -34,7 +35,19 @@ class NoticeService:
     def clear_target(self) -> None:
         self.repository.clear_setting("target_umo")
 
-    async def refresh(self) -> dict[str, Any]:
+    async def refresh(self, earliest_date: str = "") -> dict[str, Any]:
+        effective_date = (
+            earliest_date.strip()
+            or str(self.config.get("sync_since_date", "2025-09-01")).strip()
+        )
+        try:
+            date.fromisoformat(effective_date)
+        except ValueError:
+            return self._result(
+                False,
+                "最早同步日期必须使用 YYYY-MM-DD 格式。",
+                error_code="INVALID_EARLIEST_DATE",
+            )
         if self._refresh_lock.locked():
             return self._result(
                 False,
@@ -42,8 +55,17 @@ class NoticeService:
                 error_code="SYNC_IN_PROGRESS",
             )
         async with self._refresh_lock:
+            sync_state = self.repository.sync_state()
+            needs_backfill = (
+                not sync_state["coverage_since_date"]
+                or sync_state["coverage_since_date"] > effective_date
+                or sync_state["missing_detail_count"] > 0
+            )
+            stop_at_ids = set() if needs_backfill else sync_state["notice_ids"]
             try:
-                summaries = await self.provider.fetch_list()
+                summaries, pages_fetched = await self.provider.fetch_list(
+                    effective_date, stop_at_ids
+                )
             except Exception as exc:
                 return self._result(
                     False,
@@ -70,10 +92,17 @@ class NoticeService:
                     record["content"] = None
                 records.append(record)
 
-            new_rows = self.repository.apply_snapshot(records)
+            snapshot = self.repository.apply_snapshot(
+                records,
+                coverage_since_date=effective_date if needs_backfill else "",
+            )
+            new_rows = snapshot["new_rows"]
+            notification_rows = snapshot["notification_rows"]
             delivery = await self.deliver_pending()
             message = (
-                f"教务处同步完成：读取 {len(records)} 条，新增 {len(new_rows)} 条。"
+                f"教务处同步完成：从 {effective_date} 起读取 {pages_fetched} 页、"
+                f"{len(records)} 条，新增入库 {len(new_rows)} 条，"
+                f"新增通知 {len(notification_rows)} 条。"
             )
             if detail_errors:
                 message += f" {len(detail_errors)} 条正文暂未缓存。"
@@ -86,8 +115,13 @@ class NoticeService:
                 message,
                 data={
                     "fetched_count": len(records),
+                    "pages_fetched": pages_fetched,
+                    "earliest_date": effective_date,
                     "new_count": len(new_rows),
                     "new_notices": new_rows,
+                    "notification_count": len(notification_rows),
+                    "notifications": notification_rows,
+                    "baseline_count": snapshot["baseline_count"],
                     "detail_error_count": len(detail_errors),
                     "detail_errors": detail_errors,
                     **delivery,
@@ -157,6 +191,7 @@ class NoticeService:
                     1, int(self.config.get("refresh_interval_minutes", 10))
                 ),
                 "source_url": self.config.get("source_url"),
+                "sync_since_date": self.config.get("sync_since_date"),
                 "sync_in_progress": self._refresh_lock.locked(),
             }
         )

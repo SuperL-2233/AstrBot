@@ -21,7 +21,7 @@ from .utils.permission import ensure_bind_access
     "astrbot_plugin_cugb_jwc_notice",
     "macroladlezilla",
     "CUGB 教务处通知",
-    "0.1.0",
+    "0.2.0",
 )
 class CugbJwcNoticePlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -67,7 +67,7 @@ class CugbJwcNoticePlugin(star.Star):
         return {
             "summary": "同步教务处公开通知，推送新增条目，并检索本地正文缓存。",
             "features": [
-                "默认每 10 分钟同步教务处通知",
+                "默认每 10 分钟同步 2025-09-01 以来的教务处通知",
                 "新增通知 QQ 私聊推送",
                 "通知正文关键词检索与链接返回",
             ],
@@ -93,7 +93,7 @@ class CugbJwcNoticePlugin(star.Star):
         yield event.plain_result(
             "CUGB 教务处通知\n"
             "/教务通知状态\n"
-            "/教务通知同步\n"
+            "/教务通知同步 [最早日期 YYYY-MM-DD]\n"
             "/教务通知搜索 <正文关键词>\n"
             "/教务通知绑定\n"
             "/教务通知解绑"
@@ -104,8 +104,8 @@ class CugbJwcNoticePlugin(star.Star):
         yield event.plain_result(format_status(self.get_public_status()))
 
     @filter.command("教务通知同步")
-    async def refresh_command(self, event: AstrMessageEvent):
-        result = await self.notice_service.refresh()
+    async def refresh_command(self, event: AstrMessageEvent, earliest_date: str = ""):
+        result = await self.notice_service.refresh(earliest_date)
         yield event.plain_result(result["message"])
 
     @filter.command("教务通知搜索")
@@ -136,9 +136,15 @@ class CugbJwcNoticePlugin(star.Star):
         yield event.plain_result("已解除教务处通知 QQ 推送绑定。")
 
     @llm_tool("refresh_jwc_notices")
-    async def tool_refresh_jwc_notices(self, _context) -> str:
-        """立即从 CUGB 教务处公开网页同步通知并推送新增条目。"""
-        return json.dumps(await self.notice_service.refresh(), ensure_ascii=False)
+    async def tool_refresh_jwc_notices(self, _context, earliest_date: str = "") -> str:
+        """立即同步 CUGB 教务处通知；默认追溯到 2025-09-01。
+
+        Args:
+            earliest_date(string): 可选最早发布日期，格式 YYYY-MM-DD；留空使用插件默认值
+        """
+        return json.dumps(
+            await self.notice_service.refresh(earliest_date), ensure_ascii=False
+        )
 
     @llm_tool("search_jwc_notice_contents")
     async def tool_search_jwc_notice_contents(self, _context, keyword: str) -> str:

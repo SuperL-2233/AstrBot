@@ -3,5 +3,5 @@ display_name: CUGB 教务处通知
 author: macroladlezilla
 description: 定时同步教务处公开通知，向绑定 QQ 私聊推送更新，并提供正文关键词检索。
 short_desc: 教务处通知同步、QQ 推送与正文检索。
-version: 0.1.0
+version: 0.2.0
 repo: https://github.com/macroladlezilla/astrbot_plugin_cugb_jwc_notice
