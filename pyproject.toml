@@ -90,6 +90,7 @@ exclude = [
   "astrbot/api/all.py",
   "tests",
   "data/plugins/astrbot_plugin_chaoxing_deadline/providers/vendor",
+  "data/plugins/astrbot_plugin_cugb_jwc_notice/providers/vendor",
 ]
 line-length = 88
 target-version = "py310"

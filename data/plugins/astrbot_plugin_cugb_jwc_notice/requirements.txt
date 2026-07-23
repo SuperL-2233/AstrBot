@@ -1,0 +1,1 @@
+# The vendored upstream reader uses only Python's standard library.

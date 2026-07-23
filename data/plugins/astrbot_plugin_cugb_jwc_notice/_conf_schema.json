@@ -1,0 +1,52 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "是否启用教务处通知后台同步",
+    "default": true
+  },
+  "database": {
+    "type": "string",
+    "description": "通知、正文、推送队列和绑定目标的独立数据库文件名",
+    "default": "jwc_notices.sqlite"
+  },
+  "source_url": {
+    "type": "string",
+    "description": "CUGB 教务处公开通知列表 HTTPS 地址",
+    "default": "https://jwc.cugb.edu.cn/xszq/"
+  },
+  "refresh_interval_minutes": {
+    "type": "int",
+    "description": "后台同步间隔（分钟）",
+    "default": 10
+  },
+  "list_pages": {
+    "type": "int",
+    "description": "每次同步读取的列表页数",
+    "default": 1
+  },
+  "timeout_seconds": {
+    "type": "int",
+    "description": "单次教务处网页请求超时秒数",
+    "default": 10
+  },
+  "request_retries": {
+    "type": "int",
+    "description": "网页请求失败后的重试次数",
+    "default": 2
+  },
+  "target_umo": {
+    "type": "string",
+    "description": "可选 AstrBot unified_msg_origin；留空时使用 QQ 私聊命令绑定值",
+    "default": ""
+  },
+  "owner_qq_id": {
+    "type": "string",
+    "description": "允许绑定或解绑推送目标的 QQ 号；留空时允许任意私聊用户绑定",
+    "default": ""
+  },
+  "search_limit": {
+    "type": "int",
+    "description": "正文关键词检索最大返回条数",
+    "default": 10
+  }
+}

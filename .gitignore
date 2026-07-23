@@ -31,6 +31,8 @@ data/plugins/*
 !data/plugins/astrbot_plugin_chaoxing_deadline/**
 !data/plugins/astrbot_plugin_capability_registry/
 !data/plugins/astrbot_plugin_capability_registry/**
+!data/plugins/astrbot_plugin_cugb_jwc_notice/
+!data/plugins/astrbot_plugin_cugb_jwc_notice/**
 configs/session
 configs/config.yaml
 cmd_config.json
