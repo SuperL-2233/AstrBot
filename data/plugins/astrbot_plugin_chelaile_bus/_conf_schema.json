@@ -1,0 +1,55 @@
+{
+  "permission": {
+    "type": "object",
+    "description": "权限控制",
+    "items": {
+      "allowed_private_users": {
+        "type": "list",
+        "description": "允许使用插件的私聊用户 ID",
+        "default": []
+      },
+      "allowed_groups": {
+        "type": "list",
+        "description": "允许使用插件的群 ID",
+        "default": []
+      }
+    }
+  },
+  "bus": {
+    "type": "object",
+    "description": "公交查询配置",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "是否启用公交查询模块",
+        "default": true
+      },
+      "city_id": {
+        "type": "string",
+        "description": "车来了城市 ID，默认 027",
+        "default": "027"
+      },
+      "max_buses": {
+        "type": "int",
+        "description": "每个方向最多显示的到站车辆数",
+        "default": 2
+      },
+      "request_timeout_seconds": {
+        "type": "int",
+        "description": "上游接口请求超时时间（秒）",
+        "default": 15
+      }
+    }
+  },
+  "llm": {
+    "type": "object",
+    "description": "LLM 工具配置",
+    "items": {
+      "enable_tools": {
+        "type": "bool",
+        "description": "是否启用插件 LLM tools",
+        "default": true
+      }
+    }
+  }
+}
