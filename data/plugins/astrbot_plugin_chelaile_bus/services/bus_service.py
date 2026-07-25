@@ -221,6 +221,69 @@ class BusService:
             message="查询成功。",
         )
 
+    async def get_line_schedule(self, line: str, city_id: str = "") -> dict[str, Any]:
+        """Query first/last departure times for each direction of a line.
+
+        Args:
+            line: Bus line number, e.g. "76".
+            city_id: Optional chelaile city ID overriding the configured default.
+
+        Returns:
+            A result dict from make_result. On success data contains line,
+            city_id and directions; each direction holds a caption plus
+            first_station, last_station, first_time, last_time, price and
+            stations_num.
+        """
+        bus_cfg = self.config["bus"]
+        if not bus_cfg.get("enabled", True) or self.provider is None:
+            return make_result(
+                False, message="公交查询功能未启用。", error_code="BUS_DISABLED"
+            )
+        line = str(line or "").strip()
+        if not line:
+            return make_result(
+                False,
+                message="请提供公交线路号。",
+                error_code="BUS_INVALID_ARGUMENT",
+            )
+        city = str(city_id or "").strip() or str(bus_cfg.get("city_id", "027"))
+        try:
+            lines = await self.provider.search_lines(line, city)
+        except UPSTREAM_ERRORS as exc:
+            return make_result(
+                False,
+                message=f"公交线路查询失败：{exc}",
+                error_code="BUS_UPSTREAM_ERROR",
+            )
+        if not lines:
+            return make_result(
+                False,
+                message=f"未找到公交线路「{line}」。",
+                error_code="BUS_LINE_NOT_FOUND",
+            )
+
+        directions = []
+        errors = []
+        for line_info in lines:
+            try:
+                info = await self.provider.get_line_info(line_info["line_id"], city)
+            except UPSTREAM_ERRORS as exc:
+                errors.append(exc)
+                continue
+            directions.append({"caption": line_info["caption"], **info})
+
+        if not directions:
+            return make_result(
+                False,
+                message=f"公交线路信息查询失败：{errors[0] if errors else '无可用方向'}",
+                error_code="BUS_UPSTREAM_ERROR",
+            )
+        return make_result(
+            True,
+            data={"line": line, "city_id": city, "directions": directions},
+            message="查询成功。",
+        )
+
     @staticmethod
     def _normalize_buses(
         buses: list[dict[str, Any]], target_order: Any, max_buses: int

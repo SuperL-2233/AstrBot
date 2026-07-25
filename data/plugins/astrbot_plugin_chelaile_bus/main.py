@@ -5,7 +5,7 @@ import json
 from astrbot.api import llm_tool, logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
-from .formatters.bus_formatter import format_bus_arrivals
+from .formatters.bus_formatter import format_bus_arrivals, format_line_schedule
 from .providers.chelaile_provider import ChelaileProvider
 from .services.bus_service import BusService
 from .utils.config_loader import load_plugin_config
@@ -16,7 +16,7 @@ from .utils.permission_utils import ensure_general_access
     "astrbot_plugin_chelaile_bus",
     "macroladlezilla",
     "车来了公交实时到站查询插件",
-    "0.2.0",
+    "0.3.0",
 )
 class ChelaileBusPlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -43,6 +43,8 @@ class ChelaileBusPlugin(star.Star):
                 "公交查询命令",
                 "/公交 <线路号> <站点名称>",
                 "例如：/公交 368 苏州桥南",
+                "/公交首末班 <线路号>",
+                "例如：/公交首末班 76",
                 "站点名称支持模糊匹配，匹配到多个站点时会返回候选列表。",
                 "也可以直接发消息问我，例如“368 路到苏州桥南还有几站”。",
             ]
@@ -65,6 +67,19 @@ class ChelaileBusPlugin(star.Star):
             return
         result = await self.bus_service.query_arrivals(line, station)
         yield event.plain_result(format_bus_arrivals(result))
+
+    @filter.command("公交首末班", alias={"首末班"})
+    async def bus_schedule(self, event: AstrMessageEvent, line: str = ""):
+        """查询公交线路各方向的首末班发车时间。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        if not line.strip():
+            yield event.plain_result("用法：/公交首末班 <线路号>，例如 /公交首末班 76")
+            return
+        result = await self.bus_service.get_line_schedule(line)
+        yield event.plain_result(format_line_schedule(result))
 
     @llm_tool("query_bus_arrival")
     async def tool_query_bus_arrival(
@@ -104,5 +119,25 @@ class ChelaileBusPlugin(star.Star):
             )
         return json.dumps(
             await self.bus_service.search_stations(keyword, city_id),
+            ensure_ascii=False,
+        )
+
+    @llm_tool("query_bus_line_schedule")
+    async def tool_query_bus_line_schedule(
+        self, _context, line: str = "", city_id: str = ""
+    ) -> str:
+        """查询公交线路各方向的首末班发车时间、起终点站、票价和站点数量。
+
+        Args:
+            line(string): 公交线路号，必须以字符串形式传入，例如 "76"
+            city_id(string): 可选，车来了城市 ID，留空时使用插件默认配置
+        """
+        if not self.config["llm"].get("enable_tools", True):
+            return json.dumps(
+                {"success": False, "message": "公交查询 LLM 工具未启用。"},
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            await self.bus_service.get_line_schedule(line, city_id),
             ensure_ascii=False,
         )

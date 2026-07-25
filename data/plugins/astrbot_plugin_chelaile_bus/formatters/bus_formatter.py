@@ -19,6 +19,35 @@ def _format_travel_time(seconds: Any) -> str:
     return f"约 {round(seconds / 60)} 分钟后到站"
 
 
+def format_line_schedule(result: dict[str, Any]) -> str:
+    """Render a get_line_schedule result dict as chat text.
+
+    Args:
+        result: The result contract returned by BusService.get_line_schedule.
+
+    Returns:
+        A plain text message for chat platforms.
+    """
+    if not result["success"]:
+        return result["message"]
+
+    data = result["data"]
+    lines = [f"{data['line']} 路首末班时间"]
+    for direction in data["directions"]:
+        parts = []
+        if direction.get("first_time"):
+            parts.append(f"首班 {direction['first_time']}")
+        if direction.get("last_time"):
+            parts.append(f"末班 {direction['last_time']}")
+        if direction.get("stations_num"):
+            parts.append(f"共 {direction['stations_num']} 站")
+        if direction.get("price"):
+            parts.append(f"票价 {direction['price']}")
+        detail = "，".join(parts) if parts else "暂无首末班信息"
+        lines.append(f"{direction['caption']}：{detail}")
+    return "\n".join(lines)
+
+
 def format_bus_arrivals(result: dict[str, Any]) -> str:
     """Render a query_arrivals result dict as chat text.
 

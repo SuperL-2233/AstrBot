@@ -225,6 +225,42 @@ class ChelaileProvider:
         ]
         return {"stations": stations, "pois": pois}
 
+    async def get_line_info(self, line_id: str, city_id: str) -> dict[str, Any]:
+        """Fetch schedule metadata of a single line direction.
+
+        Args:
+            line_id: Chelaile line ID from search_lines.
+            city_id: Chelaile city ID.
+
+        Returns:
+            A dict with line_id, name, direction, first_station,
+            last_station, first_time, last_time, price and stations_num.
+        """
+        data = await self._request(
+            "line!encryptedLineDetail.action",
+            {
+                "cityId": city_id,
+                "localCityId": city_id,
+                "lineId": line_id,
+                "lat": "",
+                "lng": "",
+                "geo_lat": "",
+                "geo_lng": "",
+            },
+        )
+        line = data.get("line") or {}
+        return {
+            "line_id": line.get("lineId"),
+            "name": line.get("name"),
+            "direction": line.get("direction"),
+            "first_station": line.get("startSn"),
+            "last_station": line.get("endSn"),
+            "first_time": line.get("firstTime"),
+            "last_time": line.get("lastTime"),
+            "price": line.get("price"),
+            "stations_num": line.get("stationsNum"),
+        }
+
     async def get_line_stations(
         self, line_id: str, city_id: str
     ) -> list[dict[str, Any]]:
