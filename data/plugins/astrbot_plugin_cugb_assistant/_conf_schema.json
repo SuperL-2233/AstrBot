@@ -1,20 +1,4 @@
 {
-  "user": {
-    "type": "object",
-    "description": "用户基础配置",
-    "items": {
-      "qq_id": {
-        "type": "string",
-        "description": "个人课程表所属 QQ 号",
-        "default": ""
-      },
-      "timezone": {
-        "type": "string",
-        "description": "时区",
-        "default": "Asia/Shanghai"
-      }
-    }
-  },
   "permission": {
     "type": "object",
     "description": "权限控制",
@@ -28,27 +12,6 @@
         "type": "list",
         "description": "允许使用插件的群 ID",
         "default": []
-      },
-      "only_owner_can_query_personal_schedule": {
-        "type": "bool",
-        "description": "仅允许课表所属用户查询个人课程表",
-        "default": true
-      }
-    }
-  },
-  "course": {
-    "type": "object",
-    "description": "课程表配置",
-    "items": {
-      "timetable_file": {
-        "type": "string",
-        "description": "本地课程表文件名，默认从插件数据目录解析",
-        "default": "raw_timetable.xlsx"
-      },
-      "database": {
-        "type": "string",
-        "description": "课程表数据库文件名",
-        "default": "courses.sqlite"
       }
     }
   },
@@ -111,22 +74,6 @@
         "type": "int",
         "description": "缓存过期时间（分钟）",
         "default": 120
-      }
-    }
-  },
-  "reminder": {
-    "type": "object",
-    "description": "提醒配置",
-    "items": {
-      "enable_class_reminder": {
-        "type": "bool",
-        "description": "是否启用课前提醒",
-        "default": true
-      },
-      "before_class_minutes": {
-        "type": "int",
-        "description": "课前提醒时间",
-        "default": 20
       }
     }
   },

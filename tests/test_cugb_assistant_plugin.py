@@ -8,32 +8,23 @@ PLUGIN_PARENT = Path(__file__).resolve().parents[1] / "data" / "plugins"
 if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
-from astrbot_plugin_cugb_assistant.importers.import_timetable import TimetableImporter
 from astrbot_plugin_cugb_assistant.providers.classroom_mportal_provider import (
     ClassroomMportalProvider,
 )
-from astrbot_plugin_cugb_assistant.repositories.classroom_repo import ClassroomRepository
-from astrbot_plugin_cugb_assistant.repositories.course_repo import CourseRepository
+from astrbot_plugin_cugb_assistant.repositories.classroom_repo import (
+    ClassroomRepository,
+)
 from astrbot_plugin_cugb_assistant.services.classroom_service import ClassroomService
-from astrbot_plugin_cugb_assistant.services.course_service import CourseService
 from astrbot_plugin_cugb_assistant.utils.config_loader import load_plugin_config
-
-
-def test_course_service_reports_missing_timetable(tmp_path):
-    repo = CourseRepository(tmp_path / "courses.sqlite")
-    service = CourseService(repo, TimetableImporter(tmp_path / "missing.xlsx"))
-
-    result = service.get_today_courses()
-
-    assert result["success"] is False
-    assert "课程表刷新" in result["message"]
 
 
 @pytest.mark.asyncio
 async def test_classroom_service_disabled_returns_clear_message(tmp_path):
     repo = ClassroomRepository(tmp_path / "classrooms.sqlite")
     provider = ClassroomMportalProvider(repo, load_plugin_config(None))
-    service = ClassroomService(load_plugin_config({"classroom": {"provider": "disabled"}}), provider)
+    service = ClassroomService(
+        load_plugin_config({"classroom": {"provider": "disabled"}}), provider
+    )
 
     result = await service.get_empty_classrooms_now()
 
@@ -65,7 +56,11 @@ def test_mportal_provider_resolves_sections_and_filters_occupied_rooms():
                 "jsm": "101",
                 "jsrl": "80",
                 "zyjc": "3",
-                "zyxx": {"1": {"name": ""}, "2": {"name": ""}, "3": {"name": "线性代数"}},
+                "zyxx": {
+                    "1": {"name": ""},
+                    "2": {"name": ""},
+                    "3": {"name": "线性代数"},
+                },
             },
             {
                 "jxlm": "综合楼",

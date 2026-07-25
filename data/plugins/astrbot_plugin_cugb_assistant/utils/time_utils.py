@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 
 DATETIME_FORMAT = "%Y-%m-%d %H:%M"
 TIME_FORMAT = "%H:%M"
@@ -12,10 +12,6 @@ def now_local() -> datetime:
 
 def today_local() -> date:
     return now_local().date()
-
-
-def tomorrow_local() -> date:
-    return today_local() + timedelta(days=1)
 
 
 def parse_datetime(value: str) -> datetime:
@@ -34,11 +30,3 @@ def format_datetime(value: datetime | None) -> str:
     if value is None:
         return ""
     return value.strftime(DATETIME_FORMAT)
-
-
-def format_time(value: datetime | time | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, datetime):
-        value = value.time()
-    return value.strftime(TIME_FORMAT)

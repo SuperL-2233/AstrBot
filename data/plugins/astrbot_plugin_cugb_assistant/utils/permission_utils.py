@@ -18,21 +18,3 @@ def ensure_general_access(event: AstrMessageEvent, config: dict) -> str | None:
     if allowed_groups and group_id not in allowed_groups:
         return "当前群聊未被授权使用校园助手。"
     return None
-
-
-def ensure_personal_schedule_access(
-    event: AstrMessageEvent, config: dict
-) -> str | None:
-    access_error = ensure_general_access(event, config)
-    if access_error:
-        return access_error
-
-    permission_cfg = config["permission"]
-    owner_id = str(config["user"].get("qq_id", "")).strip()
-    if not permission_cfg.get("only_owner_can_query_personal_schedule", True):
-        return None
-    if not owner_id:
-        return None
-    if event.get_sender_id() != owner_id:
-        return "当前仅允许课表所属用户查询个人课程表。"
-    return None

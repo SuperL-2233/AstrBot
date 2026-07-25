@@ -3,21 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .constants import DEFAULT_TIMEZONE
-
 DEFAULT_CONFIG: dict[str, Any] = {
-    "user": {
-        "qq_id": "",
-        "timezone": DEFAULT_TIMEZONE,
-    },
     "permission": {
         "allowed_private_users": [],
         "allowed_groups": [],
-        "only_owner_can_query_personal_schedule": True,
-    },
-    "course": {
-        "timetable_file": "raw_timetable.xlsx",
-        "database": "courses.sqlite",
     },
     "classroom": {
         "enabled": True,
@@ -31,10 +20,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mportal_refresh_buildings": [],
         "update_interval_minutes": 120,
         "cache_expire_minutes": 120,
-    },
-    "reminder": {
-        "enable_class_reminder": True,
-        "before_class_minutes": 20,
     },
     "llm": {
         "enable_tools": True,
