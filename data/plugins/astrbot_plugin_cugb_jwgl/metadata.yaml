@@ -1,0 +1,6 @@
+name: astrbot_plugin_cugb_jwgl
+display_name: CUGB 教务系统监控
+author: macroladlezilla
+description: 每日定时检查并登录 CUGB 教务系统，监控课表、个人成绩与考试安排的变化，通过 QQ 私聊推送更新，并支持命令与 LLM 工具实时查询。
+short_desc: CUGB 教务登录、轮询监控与变化推送。
+version: 0.1.0

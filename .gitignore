@@ -33,6 +33,8 @@ data/plugins/*
 !data/plugins/astrbot_plugin_capability_registry/**
 !data/plugins/astrbot_plugin_cugb_jwc_notice/
 !data/plugins/astrbot_plugin_cugb_jwc_notice/**
+!data/plugins/astrbot_plugin_cugb_jwgl/
+!data/plugins/astrbot_plugin_cugb_jwgl/**
 configs/session
 configs/config.yaml
 cmd_config.json

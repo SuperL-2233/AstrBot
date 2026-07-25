@@ -1,0 +1,147 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "是否启用教务监控后台轮询",
+    "default": true
+  },
+  "database": {
+    "type": "string",
+    "description": "课表、成绩、考试快照与轮询日志的数据库文件名",
+    "default": "jwgl_monitor.sqlite"
+  },
+  "portal_url": {
+    "type": "string",
+    "description": "信息门户的 WebVPN 地址（https://elib.cugb.edu.cn/https/... 形式）",
+    "default": ""
+  },
+  "username": {
+    "type": "string",
+    "description": "统一身份认证（CAS）学号/工号",
+    "default": ""
+  },
+  "password": {
+    "type": "string",
+    "description": "统一身份认证（CAS）密码，仅用于自动提交登录第一步",
+    "default": ""
+  },
+  "headless": {
+    "type": "bool",
+    "description": "Chromium 是否以无头模式运行",
+    "default": true
+  },
+  "browser_channel": {
+    "type": "string",
+    "description": "可选浏览器渠道（如 chrome、msedge）；留空使用 Playwright 自带 Chromium",
+    "default": ""
+  },
+  "browser_profile_dir": {
+    "type": "string",
+    "description": "Chromium 持久化 Profile 目录（相对插件数据目录）",
+    "default": "browser-profile"
+  },
+  "session_cookie_file": {
+    "type": "string",
+    "description": "WebVPN 会话 cookie 保存文件名（相对插件数据目录）",
+    "default": "webvpn_session_cookies.json"
+  },
+  "navigation_timeout_seconds": {
+    "type": "int",
+    "description": "页面导航超时秒数",
+    "default": 30
+  },
+  "poll_interval_minutes": {
+    "type": "int",
+    "description": "登录后的轮询间隔（分钟），兼具会话续期",
+    "default": 15
+  },
+  "poll_jitter_minutes": {
+    "type": "int",
+    "description": "轮询间隔的正负随机抖动（分钟）",
+    "default": 2
+  },
+  "scores_probe_max_terms": {
+    "type": "int",
+    "description": "查找最晚有成绩学期时最多向前回溯的学期数",
+    "default": 6
+  },
+  "morning_login_enabled": {
+    "type": "bool",
+    "description": "是否启用每天早上的登录态检查与征询",
+    "default": true
+  },
+  "morning_login_cron": {
+    "type": "string",
+    "description": "早晨登录检查的 cron 表达式（分 时 日 月 周）",
+    "default": "0 9 * * *"
+  },
+  "timezone": {
+    "type": "string",
+    "description": "定时任务时区",
+    "default": "Asia/Shanghai"
+  },
+  "sms_timeout_seconds": {
+    "type": "int",
+    "description": "登录发起后等待验证码提交的有效秒数，超时后需重新发起登录",
+    "default": 300
+  },
+  "target_umo": {
+    "type": "string",
+    "description": "可选 AstrBot unified_msg_origin；留空时使用 /教务绑定 记录的会话（WebUI、QQ 私聊均可）",
+    "default": ""
+  },
+  "owner_qq_id": {
+    "type": "string",
+    "description": "允许绑定或解绑推送目标的用户 ID；留空时允许任意用户绑定",
+    "default": ""
+  },
+  "mportal_enabled": {
+    "type": "bool",
+    "description": "是否启用 mportal 结构化课表扫描（CAS 统一认证直连，无需 WebVPN）；关闭后周课表退化为教务文本解析",
+    "default": true
+  },
+  "mportal_base_url": {
+    "type": "string",
+    "description": "mportal 基础地址",
+    "default": "https://mportal.cugb.edu.cn"
+  },
+  "class_reminder_enabled": {
+    "type": "bool",
+    "description": "是否启用上课前提醒推送（依赖按周结构化课表）",
+    "default": true
+  },
+  "class_reminder_lead_minutes": {
+    "type": "int",
+    "description": "每节课开始前多少分钟推送提醒",
+    "default": 30
+  },
+  "class_reminder_check_seconds": {
+    "type": "int",
+    "description": "上课提醒检查间隔秒数",
+    "default": 60
+  },
+  "semester_start_date": {
+    "type": "string",
+    "description": "本学期第一周周一的日期（YYYY-MM-DD），手动覆盖项；留空时自动从 mportal 学期信息获取，两者都未知时上课提醒不生效",
+    "default": ""
+  },
+  "section_start_times": {
+    "type": "object",
+    "description": "节次开始时间映射（节次号→HH:MM），默认值为学校官方作息表",
+    "items": {
+      "1": { "type": "string", "description": "第1节开始时间", "default": "08:00" },
+      "2": { "type": "string", "description": "第2节开始时间", "default": "08:50" },
+      "3": { "type": "string", "description": "第3节开始时间", "default": "09:50" },
+      "4": { "type": "string", "description": "第4节开始时间", "default": "10:40" },
+      "5": { "type": "string", "description": "第5节开始时间", "default": "11:30" },
+      "6": { "type": "string", "description": "第6节开始时间", "default": "13:30" },
+      "7": { "type": "string", "description": "第7节开始时间", "default": "14:20" },
+      "8": { "type": "string", "description": "第8节开始时间", "default": "15:20" },
+      "9": { "type": "string", "description": "第9节开始时间", "default": "16:10" },
+      "10": { "type": "string", "description": "第10节开始时间", "default": "17:10" },
+      "11": { "type": "string", "description": "第11节开始时间", "default": "18:00" },
+      "12": { "type": "string", "description": "第12节开始时间", "default": "19:00" },
+      "13": { "type": "string", "description": "第13节开始时间", "default": "19:50" },
+      "14": { "type": "string", "description": "第14节开始时间", "default": "20:40" }
+    }
+  }
+}
