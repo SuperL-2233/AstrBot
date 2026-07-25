@@ -736,3 +736,74 @@ async def test_detached_service_requires_enabled_config(tmp_path):
     result = await service.refresh_detached()
 
     assert result["error_code"] == "CHAOXING_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_worker_timeout_leaves_worker_running(tmp_path, monkeypatch):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider({"phone": "p", "password": "s"}, repository)
+    gate = asyncio.Event()
+
+    async def controlled_to_thread(_function, *_args):
+        login_callback = _args[2] if len(_args) > 2 else None
+        if login_callback:
+            login_callback(1)
+        await gate.wait()
+        return {"course_count": 1, "task_count": 1, "partial_error_count": 0}
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", controlled_to_thread)
+    await provider.refresh_detached()
+    worker = provider._worker_task
+
+    started = asyncio.get_running_loop().time()
+    await provider.wait_for_worker(timeout=0.2)
+    waited = asyncio.get_running_loop().time() - started
+
+    assert waited < 2
+    assert worker.done() is False
+    assert worker.cancelled() is False
+
+    gate.set()
+    result = await asyncio.wait_for(asyncio.shield(worker), timeout=2)
+
+    assert result["task_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_command_replies_after_login_and_pushes_completion():
+    plugin = object.__new__(ChaoxingDeadlinePlugin)
+    pushed: list[tuple[str, str]] = []
+
+    class Context:
+        @staticmethod
+        async def send_message(target, chain) -> bool:
+            pushed.append((target, getattr(chain.chain[0], "text", "")))
+            return True
+
+    class Service:
+        @staticmethod
+        async def refresh_detached(on_finished=None):
+            if on_finished is not None:
+                asyncio.get_running_loop().call_soon(
+                    lambda: asyncio.create_task(
+                        on_finished({"success": True, "message": "同步完成"})
+                    )
+                )
+            return {"success": True, "message": "登录成功", "error_code": None}
+
+    class Event:
+        unified_msg_origin = "webchat:FriendMessage:u1"
+
+        @staticmethod
+        def plain_result(text):
+            return text
+
+    plugin.context = Context()
+    plugin.task_service = Service()
+
+    replies = [item async for item in plugin.refresh_command(Event())]
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert replies == ["登录成功"]
+    assert pushed == [("webchat:FriendMessage:u1", "同步完成")]

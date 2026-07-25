@@ -79,12 +79,25 @@ class ChaoxingProvider:
         finally:
             self.repository.release_sync_lease(self._lease_owner)
 
-    async def wait_for_worker(self) -> None:
-        """Wait for a detached sync worker before a plugin instance is unloaded."""
+    async def wait_for_worker(self, timeout: float | None = None) -> None:
+        """Wait for a detached sync worker before a plugin instance is unloaded.
+
+        Args:
+            timeout: Optional seconds to wait. On expiry the worker keeps
+                running in the background instead of being cancelled, so a
+                plugin reload never blocks on a multi-minute synchronization.
+        """
         worker = self._worker_task
         if worker:
             try:
-                await worker
+                if timeout is None:
+                    await worker
+                else:
+                    done, _ = await asyncio.wait({worker}, timeout=timeout)
+                    if worker in done and not worker.cancelled():
+                        # Mark any exception as retrieved; asyncio.wait does
+                        # not consume it the way awaiting the task would.
+                        worker.exception()
             except (
                 asyncio.CancelledError,
                 requests.RequestException,

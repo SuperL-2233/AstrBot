@@ -22,7 +22,7 @@ from .utils.permission import ensure_private_chat
     "astrbot_plugin_chaoxing_deadline",
     "macroladlezilla",
     "超星学习通助手",
-    "0.4.1",
+    "0.4.2",
 )
 class ChaoxingDeadlinePlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -57,7 +57,8 @@ class ChaoxingDeadlinePlugin(star.Star):
             self._refresh_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._refresh_task
-        await self.provider.wait_for_worker()
+        # A running sync is read-only; never stall a WebUI disable/reload on it.
+        await self.provider.wait_for_worker(timeout=5)
         if self._reminder_task:
             self._reminder_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -170,8 +171,16 @@ class ChaoxingDeadlinePlugin(star.Star):
 
     @filter.command("超星同步")
     async def refresh_command(self, event: AstrMessageEvent):
-        """Manually synchronize all supported read-only task types."""
-        result = await self.task_service.refresh()
+        """Reply after the login phase and push the completion to this chat."""
+        umo = event.unified_msg_origin
+
+        async def push_result(result: dict) -> None:
+            try:
+                await self._send_message(umo, result["message"])
+            except Exception as exc:
+                logger.warning(f"超星后台同步结果推送失败: {exc}")
+
+        result = await self.task_service.refresh_detached(on_finished=push_result)
         yield event.plain_result(result["message"])
 
     @filter.command("超星任务")
