@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import json
+from contextlib import suppress
+
+from astrbot.api import llm_tool, logger, star
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.core.star.filter.command import GreedyStr
+
+from .formatters.weather_formatter import (
+    format_location_status,
+    format_push_time_status,
+    format_weather_report,
+)
+from .providers.baidu_weather_provider import BaiduWeatherProvider
+from .repositories.settings_repo import SettingsRepository
+from .services.state_service import StateService
+from .services.weather_service import WeatherService
+from .utils.config_loader import load_plugin_config
+from .utils.paths import resolve_data_path
+from .utils.permission_utils import ensure_general_access
+from .utils.time_utils import today_local
+
+PUSH_JOB_NAME = "baidu_weather_daily_push"
+REFRESH_JOB_NAME = "baidu_weather_push_refresh"
+
+
+@star.register(
+    "astrbot_plugin_baidu_weather",
+    "macroladlezilla",
+    "百度天气查询与定时推送",
+    "0.1.0",
+)
+class BaiduWeatherPlugin(star.Star):
+    def __init__(self, context: star.Context, config: dict | None = None) -> None:
+        super().__init__(context, config)
+        self.config = load_plugin_config(config)
+        repo = SettingsRepository(resolve_data_path("weather.sqlite"))
+        self.state_service = StateService(self.config, repo)
+        self.weather_service = WeatherService(
+            self.config, BaiduWeatherProvider(self.config), self.state_service
+        )
+        self._push_job_id: str | None = None
+        self._refresh_job_id: str | None = None
+
+    async def initialize(self) -> None:
+        logger.info("astrbot_plugin_baidu_weather initialized")
+        try:
+            refresh_job = await self.context.cron_manager.add_basic_job(
+                name=REFRESH_JOB_NAME,
+                cron_expression="5 0 * * *",
+                handler=self._refresh_push_job,
+                timezone=self.state_service.tz_name,
+                persistent=False,
+            )
+            self._refresh_job_id = refresh_job.job_id
+            await self._refresh_push_job()
+        except Exception as exc:
+            logger.warning(f"Baidu weather push jobs registration failed: {exc}")
+
+    async def terminate(self) -> None:
+        for job_id in (self._push_job_id, self._refresh_job_id):
+            if job_id:
+                with suppress(Exception):
+                    await self.context.cron_manager.delete_job(job_id)
+
+    async def _refresh_push_job(self) -> None:
+        """(Re)register the daily push job at today's effective push time.
+
+        The effective time can change when the user edits settings or when a
+        dated override starts/ends (handled by the daily 00:05 refresh job).
+        """
+        hhmm = self.state_service.effective_push_time(
+            today_local(self.state_service.tz_name)
+        )
+        hour, minute = hhmm.split(":")
+        cron_expression = f"{int(minute)} {int(hour)} * * *"
+        if self._push_job_id:
+            job = await self.context.cron_manager.update_job(
+                self._push_job_id, cron_expression=cron_expression
+            )
+            if job:
+                return
+        job = await self.context.cron_manager.add_basic_job(
+            name=PUSH_JOB_NAME,
+            cron_expression=cron_expression,
+            handler=self._push_weather,
+            timezone=self.state_service.tz_name,
+            persistent=False,
+        )
+        self._push_job_id = job.job_id
+
+    async def _push_weather(self) -> None:
+        if not self.state_service.push_enabled():
+            return
+        umo = self.state_service.get_target_umo()
+        if not umo:
+            logger.info("Baidu weather push skipped: no target session bound")
+            return
+        result = await self.weather_service.query_weather("", 1)
+        if not result["success"]:
+            logger.warning(f"Baidu weather push failed: {result['message']}")
+            return
+        text = format_weather_report(result["data"], greeting="早上好！今日天气：")
+        await self.context.send_message(umo, MessageChain().message(text))
+
+    @filter.command("天气帮助")
+    async def help_command(self, event: AstrMessageEvent):
+        """显示天气助手命令帮助。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        yield event.plain_result(
+            "天气助手命令\n"
+            "/天气 [地点] 查询当天天气\n"
+            "/天气位置 [地点] 查看或设置常驻位置\n"
+            "/天气推送时间 [HH:MM] 查看或设置常驻推送时间\n"
+            "/天气推送绑定 将每日推送绑定到当前会话\n"
+            "/天气推送开关 [开|关] 查看或切换每日推送\n"
+            "也可以直接对我说：我现在在×× / 我未来几天都会在×× / "
+            "以后每天8点推天气 / 查一下未来三天天气"
+        )
+
+    @filter.command("天气")
+    async def weather_command(self, event: AstrMessageEvent, location: GreedyStr = ""):
+        """查询当天天气，可指定地点。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        result = await self.weather_service.query_weather(str(location).strip(), 1)
+        if not result["success"]:
+            yield event.plain_result(result["message"])
+            return
+        yield event.plain_result(format_weather_report(result["data"]))
+
+    @filter.command("天气位置")
+    async def location_command(self, event: AstrMessageEvent, location: GreedyStr = ""):
+        """查看位置状态或设置常驻位置。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        address = str(location).strip()
+        if address:
+            result = await self.weather_service.set_location(address)
+            yield event.plain_result(result["message"])
+            return
+        yield event.plain_result(format_location_status(self.state_service.status()))
+
+    @filter.command("天气推送时间")
+    async def push_time_command(self, event: AstrMessageEvent, time_text: str = ""):
+        """查看推送时间状态或设置常驻推送时间。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        time_text = time_text.strip()
+        if time_text:
+            result = self.weather_service.set_push_time(time_text)
+            if result["success"]:
+                with suppress(Exception):
+                    await self._refresh_push_job()
+            yield event.plain_result(result["message"])
+            return
+        yield event.plain_result(format_push_time_status(self.state_service.status()))
+
+    @filter.command("天气推送绑定")
+    async def bind_command(self, event: AstrMessageEvent):
+        """将每日天气推送绑定到当前会话。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        self.state_service.set_target_umo(event.unified_msg_origin)
+        yield event.plain_result("已将每日天气推送绑定到当前会话。")
+
+    @filter.command("天气推送开关")
+    async def push_toggle_command(self, event: AstrMessageEvent, action: str = ""):
+        """查看或切换每日推送开关。"""
+        access_error = ensure_general_access(event, self.config)
+        if access_error:
+            yield event.plain_result(access_error)
+            return
+        action = action.strip()
+        if action in ("开", "开启", "on"):
+            self.state_service.set_push_enabled(True)
+            yield event.plain_result("已开启每日天气推送。")
+        elif action in ("关", "关闭", "off"):
+            self.state_service.set_push_enabled(False)
+            yield event.plain_result("已关闭每日天气推送。")
+        else:
+            state = "开" if self.state_service.push_enabled() else "关"
+            yield event.plain_result(
+                f"每日天气推送当前为：{state}。用法：/天气推送开关 开|关"
+            )
+
+    @llm_tool("get_weather")
+    async def tool_get_weather(
+        self, _context, location: str = "", days: int = 1
+    ) -> str:
+        """查询天气，可查询当天或未来多天的天气预报（最多7天）。
+        用户没有指定地点时 location 留空，将使用用户已保存的位置（行程优先）；
+        用户明确指定地点时把地点名称填入 location。
+        返回结果中的 hours 字段包含未来24小时逐小时预报（时刻、天气现象、温度、
+        风向风力、湿度、小时降水量）；用户问逐小时天气、几点下雨、今天何时最热
+        等问题时，用 hours 中的数据回答。
+
+        Args:
+            location(string): 可选，地点名称；留空使用已保存的位置
+            days(number): 可选，查询天数，1-7，默认1（当天）
+        """
+        access_error = ensure_general_access(_context, self.config)
+        if access_error:
+            return json.dumps(
+                {"success": False, "message": access_error}, ensure_ascii=False
+            )
+        result = await self.weather_service.query_weather(location, days)
+        return json.dumps(result, ensure_ascii=False)
+
+    @llm_tool("set_user_location")
+    async def tool_set_user_location(
+        self, _context, location: str, start_date: str = "", end_date: str = ""
+    ) -> str:
+        """设置用户所在位置，用于天气查询和每日天气推送。
+        用户说"我现在在某地"时，start_date 和 end_date 都留空（设为常驻位置）。
+        用户说"我未来几天都会在某个地方"或"X号到Y号在某地"时，由你根据当前日期
+        推算出起止日期，以 YYYY-MM-DD 格式填入 start_date 和 end_date
+        （设为行程，行程期间覆盖常驻位置，结束后自动回退）。
+
+        Args:
+            location(string): 地点名称，如"五道口"或"杭州市西湖区"
+            start_date(string): 行程开始日期，格式YYYY-MM-DD，可选
+            end_date(string): 行程结束日期，格式YYYY-MM-DD，可选
+        """
+        access_error = ensure_general_access(_context, self.config)
+        if access_error:
+            return json.dumps(
+                {"success": False, "message": access_error}, ensure_ascii=False
+            )
+        result = await self.weather_service.set_location(location, start_date, end_date)
+        return json.dumps(result, ensure_ascii=False)
+
+    @llm_tool("set_weather_push_time")
+    async def tool_set_weather_push_time(
+        self, _context, time: str, start_date: str = "", end_date: str = ""
+    ) -> str:
+        """设置每日天气推送的时间。
+        用户说"以后每天X点推天气"时，start_date 和 end_date 留空（设为常驻推送时间）。
+        用户说"接下来几天X点推"或"X号到Y号X点推"时，由你根据当前日期推算起止日期，
+        以 YYYY-MM-DD 格式填入（设为限期推送时间，到期自动回退到常驻时间）。
+
+        Args:
+            time(string): 推送时间，格式HH:MM，如07:50
+            start_date(string): 生效开始日期，格式YYYY-MM-DD，可选
+            end_date(string): 生效结束日期，格式YYYY-MM-DD，可选
+        """
+        access_error = ensure_general_access(_context, self.config)
+        if access_error:
+            return json.dumps(
+                {"success": False, "message": access_error}, ensure_ascii=False
+            )
+        result = self.weather_service.set_push_time(time, start_date, end_date)
+        if result["success"]:
+            with suppress(Exception):
+                await self._refresh_push_job()
+        return json.dumps(result, ensure_ascii=False)

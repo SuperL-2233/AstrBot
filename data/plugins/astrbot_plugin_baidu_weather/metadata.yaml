@@ -1,0 +1,7 @@
+name: astrbot_plugin_baidu_weather
+display_name: 百度天气助手
+author: macroladlezilla
+description: 基于百度地图 API 的天气查询与每日定时推送插件，支持常驻/行程双态位置与常驻/限期双态推送时间。
+short_desc: 百度天气查询与每日定时推送。
+version: 0.1.0
+repo: https://github.com/macroladlezilla/astrbot_plugin_baidu_weather

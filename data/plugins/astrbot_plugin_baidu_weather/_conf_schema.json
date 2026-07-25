@@ -1,0 +1,60 @@
+{
+  "permission": {
+    "type": "object",
+    "description": "权限控制",
+    "items": {
+      "allowed_private_users": {
+        "type": "list",
+        "description": "允许使用插件的私聊用户 ID",
+        "default": []
+      },
+      "allowed_groups": {
+        "type": "list",
+        "description": "允许使用插件的群 ID",
+        "default": []
+      }
+    }
+  },
+  "baidu": {
+    "type": "object",
+    "description": "百度地图开放平台配置",
+    "items": {
+      "ak": {
+        "type": "string",
+        "description": "百度地图开放平台服务端 AK",
+        "default": ""
+      },
+      "timeout_seconds": {
+        "type": "int",
+        "description": "百度 API 请求超时时间（秒）",
+        "default": 10
+      }
+    }
+  },
+  "push": {
+    "type": "object",
+    "description": "每日天气推送配置",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "是否启用每日天气推送",
+        "default": true
+      },
+      "default_time": {
+        "type": "string",
+        "description": "默认每日推送时间（HH:MM），仅在用户未设置过推送时间时生效",
+        "default": "07:50"
+      },
+      "timezone": {
+        "type": "string",
+        "description": "推送与日期计算使用的时区",
+        "default": "Asia/Shanghai"
+      },
+      "target_umo": {
+        "type": "string",
+        "description": "推送目标会话（unified_msg_origin），配置后优先于 /天气推送绑定 保存的会话",
+        "default": ""
+      }
+    }
+  }
+}
