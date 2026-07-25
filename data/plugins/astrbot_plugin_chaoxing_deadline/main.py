@@ -332,11 +332,28 @@ class ChaoxingDeadlinePlugin(star.Star):
 
     @llm_tool("sync_chaoxing_tasks")
     async def tool_sync_chaoxing_tasks(self, _context) -> str:
-        """立即从学习通云端同步作业、视频章节、讨论和截止提醒计划。
+        """登录学习通并同步作业、视频章节、讨论和截止提醒计划。
+
+        只等待登录结果：登录成功立即返回，任务数据在后台继续同步，完成后
+        主动向当前会话推送完成消息；登录失败立即返回原因。同步耗时数分钟，
+        不要在收到完成推送前重复调用。
 
         Args:
         """
-        return json.dumps(await self.task_service.refresh(), ensure_ascii=False)
+        umo = str(getattr(_context, "unified_msg_origin", "") or "")
+
+        async def push_result(result: dict) -> None:
+            target = umo or self.reminder_service.repository.get_target_umo()
+            if not target:
+                logger.warning(f"超星后台同步结束但无推送目标：{result['message']}")
+                return
+            try:
+                await self._send_message(target, result["message"])
+            except Exception as exc:
+                logger.warning(f"超星后台同步结果推送失败: {exc}")
+
+        result = await self.task_service.refresh_detached(on_finished=push_result)
+        return json.dumps(result, ensure_ascii=False)
 
     @llm_tool("set_chaoxing_task_tracking")
     async def tool_set_chaoxing_task_tracking(

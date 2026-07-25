@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..providers.chaoxing_provider import ChaoxingProvider
@@ -41,6 +41,40 @@ class TaskService:
                 if inspect.isawaitable(callback_result):
                     await callback_result
             return result
+
+    async def refresh_detached(
+        self,
+        on_finished: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> dict:
+        """Refresh in the background and return after the login phase.
+
+        Args:
+            on_finished: Optional coroutine callback invoked with the final
+                result dict after the background synchronization completes.
+
+        Returns:
+            Login-phase result dict from the provider.
+        """
+        if not self.config.get("enabled", False):
+            return {
+                "success": False,
+                "data": None,
+                "message": "超星在线同步未启用。",
+                "error_code": "CHAOXING_DISABLED",
+            }
+
+        async def _finished(result: dict) -> None:
+            if result.get("success") and self.on_refreshed:
+                callback_result = self.on_refreshed()
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            if on_finished is not None:
+                await on_finished(result)
+
+        # Deliberately no service-level lock: the provider's worker guard and
+        # SQLite lease already reject overlap, and holding the lock here would
+        # stall the caller for the whole duration of any running full sync.
+        return await self.provider.refresh_detached(on_finished=_finished)
 
     async def ensure_fresh(self) -> dict:
         max_age_hours = max(1, int(self.config.get("cache_max_age_hours", 24)))

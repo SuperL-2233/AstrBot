@@ -565,3 +565,174 @@ async def test_category_tools_query_completed_records():
         "status": "已完成",
         "keyword": "线性代数",
     }
+
+
+@pytest.mark.asyncio
+async def test_detached_refresh_returns_after_login_then_pushes_completion(
+    tmp_path, monkeypatch
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider({"phone": "p", "password": "s"}, repository)
+    worker_release = asyncio.Event()
+
+    async def controlled_to_thread(_function, *_args):
+        login_callback = _args[2] if len(_args) > 2 else None
+        if login_callback:
+            login_callback(3)
+        await worker_release.wait()
+        return {"course_count": 3, "task_count": 9, "partial_error_count": 1}
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", controlled_to_thread)
+    pushed: list[dict] = []
+
+    async def on_finished(result: dict) -> None:
+        pushed.append(result)
+
+    result = await provider.refresh_detached(on_finished=on_finished)
+
+    assert result["success"] is True
+    assert result["data"] == {"course_count": 3}
+    assert "登录成功" in result["message"]
+    assert pushed == []
+    assert repository.sync_guard_state()["lease_active"] is True
+
+    worker_release.set()
+    await asyncio.wait_for(provider.wait_for_worker(), timeout=2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(pushed) == 1
+    assert pushed[0]["success"] is True
+    assert "3 门课程" in pushed[0]["message"]
+    assert "9 个任务" in pushed[0]["message"]
+    assert repository.sync_guard_state()["lease_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_detached_refresh_login_failure_returns_error_without_push(
+    tmp_path, monkeypatch
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider({"phone": "p", "password": "s"}, repository)
+
+    async def failing_to_thread(_function, *_args):
+        raise RuntimeError("登录失败: 密码错误")
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", failing_to_thread)
+    pushed: list[dict] = []
+
+    async def on_finished(result: dict) -> None:
+        pushed.append(result)
+
+    result = await provider.refresh_detached(on_finished=on_finished)
+
+    assert result["success"] is False
+    assert result["error_code"] == "CHAOXING_LOGIN_FAILED"
+    assert "密码错误" in result["message"]
+    assert pushed == []
+    assert repository.sync_guard_state()["lease_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_detached_refresh_login_antispider_enters_cooldown(tmp_path, monkeypatch):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider(
+        {"phone": "p", "password": "s", "antispider_cooldown_hours": 12},
+        repository,
+    )
+
+    async def antispider_to_thread(_function, *_args):
+        raise provider_module.ChaoxingAntiSpiderError("超星返回 403 反爬提示")
+
+    monkeypatch.setattr(provider_module.asyncio, "to_thread", antispider_to_thread)
+
+    first = await provider.refresh_detached()
+    second = await provider.refresh_detached()
+
+    assert first["error_code"] == "CHAOXING_ANTISPIDER_DETECTED"
+    assert second["error_code"] == "CHAOXING_ANTISPIDER_BACKOFF"
+    assert repository.sync_guard_state()["backoff_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_detached_service_syncs_cache_and_rebuilds_schedule(
+    tmp_path, monkeypatch
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    config = {"enabled": True, "phone": "p", "password": "s", "timeout_seconds": 20}
+    provider = ChaoxingProvider(config, repository)
+    api = provider_module.chaoxing_api
+    monkeypatch.setattr(api, "create_session", lambda: object())
+    monkeypatch.setattr(api, "login", lambda *_args: "uid")
+    monkeypatch.setattr(
+        api,
+        "get_courses",
+        lambda *_args: [
+            {"name": "测试课程", "courseId": "10", "classId": "20", "url": "u"}
+        ],
+    )
+    monkeypatch.setattr(
+        api,
+        "get_course_context",
+        lambda *_args: ({"courseId": "10", "classId": "20", "url": "u"}, "page"),
+    )
+    monkeypatch.setattr(api, "extract_video_rows", lambda *_args: ([], {}))
+    monkeypatch.setattr(
+        api,
+        "extract_course_schedule",
+        lambda *_args: {"deadline": "", "deadline_raw": ""},
+    )
+    monkeypatch.setattr(
+        api,
+        "extract_work_rows",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "type": "作业",
+                    "name": "作业一",
+                    "item_id": "h1",
+                    "status": "未交",
+                    "deadline": (datetime.now() + timedelta(days=10)).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    "url": "h",
+                }
+            ],
+            "",
+        ),
+    )
+    monkeypatch.setattr(api, "extract_discussion_rows", lambda *_args: ([], ""))
+    reminder = ReminderService({"reminder_enabled": True}, repository)
+    service = TaskService(
+        config, provider, repository, on_refreshed=reminder.sync_schedule
+    )
+    pushed: list[dict] = []
+
+    async def on_finished(result: dict) -> None:
+        pushed.append(result)
+
+    result = await service.refresh_detached(on_finished=on_finished)
+    assert result["success"] is True
+    assert "登录成功" in result["message"]
+
+    await asyncio.wait_for(provider.wait_for_worker(), timeout=10)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(pushed) == 1
+    assert pushed[0]["success"] is True
+    tasks = repository.query_tasks(task_status="")
+    assert len(tasks) == 1
+    assert tasks[0]["title"] == "作业一"
+    assert reminder.status()["scheduled_stages"] == 7
+
+
+@pytest.mark.asyncio
+async def test_detached_service_requires_enabled_config(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    provider = ChaoxingProvider({}, repository)
+    service = TaskService({"enabled": False}, provider, repository)
+
+    result = await service.refresh_detached()
+
+    assert result["error_code"] == "CHAOXING_DISABLED"

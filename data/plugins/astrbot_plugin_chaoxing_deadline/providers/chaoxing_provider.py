@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 import requests
@@ -59,9 +60,16 @@ class ChaoxingProvider:
         )
         return error
 
-    async def _run_leased_worker(self, phone: str, password: str) -> dict:
+    async def _run_leased_worker(
+        self,
+        phone: str,
+        password: str,
+        login_callback: Callable[[int], None] | None = None,
+    ) -> dict:
         try:
-            return await asyncio.to_thread(self._refresh_sync, phone, password)
+            return await asyncio.to_thread(
+                self._refresh_sync, phone, password, login_callback
+            )
         except ChaoxingAntiSpiderError as exc:
             raise self._record_antispider_backoff(exc)
         except requests.RequestException as exc:
@@ -164,12 +172,177 @@ class ChaoxingProvider:
             "error_code": None,
         }
 
-    def _refresh_sync(self, phone: str, password: str) -> dict:
+    @staticmethod
+    def _worker_outcome(worker: asyncio.Task) -> dict:
+        """Convert a finished detached worker into a push-friendly result.
+
+        Args:
+            worker: Completed detached synchronization task.
+
+        Returns:
+            Result dict with a success flag and a user-facing message.
+        """
+        if worker.cancelled():
+            return {"success": False, "message": "超星后台同步已取消。"}
+        error = worker.exception()
+        if error is not None:
+            return {"success": False, "message": f"超星后台同步失败：{error}"}
+        data = worker.result()
+        return {
+            "success": True,
+            "message": (
+                f"超星后台同步完成：{data['course_count']} 门课程、"
+                f"{data['task_count']} 个任务，"
+                f"{data['partial_error_count']} 项局部读取提示。"
+            ),
+        }
+
+    async def refresh_detached(
+        self,
+        on_finished: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> dict:
+        """Start a synchronization and return as soon as login is verified.
+
+        The full course/task extraction keeps running in a detached worker so
+        callers bounded by the LLM tool-call timeout can answer immediately.
+
+        Args:
+            on_finished: Optional coroutine callback invoked with the final
+                result dict once the background worker completes. Only
+                attached after a confirmed login, so login-phase failures are
+                reported solely through the return value.
+
+        Returns:
+            Login-phase result dict. success=True means the session is
+            authenticated and the background synchronization continues.
+        """
+        phone = str(self.config.get("phone", "")).strip()
+        password = str(self.config.get("password", ""))
+        if not phone or not password:
+            return {
+                "success": False,
+                "data": None,
+                "message": "请先在插件运行时配置中填写学习通手机号和密码。",
+                "error_code": "CHAOXING_CREDENTIALS_MISSING",
+            }
+        # No await points between this check and the worker assignment below,
+        # so concurrent calls cannot both pass within one event-loop step.
+        if self._worker_task and not self._worker_task.done():
+            return {
+                "success": False,
+                "data": None,
+                "message": "当前插件实例已有超星同步正在运行。",
+                "error_code": "CHAOXING_SYNC_IN_PROGRESS",
+            }
+        guard = self.repository.sync_guard_state()
+        if guard["backoff_active"]:
+            self.last_error = guard["backoff_reason"]
+            return {
+                "success": False,
+                "data": None,
+                "message": (
+                    f"超星同步处于反爬冷却期，{guard['backoff_until']} 前不会访问云端。"
+                    f"原因：{guard['backoff_reason']}"
+                ),
+                "error_code": "CHAOXING_ANTISPIDER_BACKOFF",
+            }
+        lease_minutes = max(5, int(self.config.get("sync_lease_minutes", 30)))
+        if not self.repository.claim_sync_lease(self._lease_owner, lease_minutes):
+            guard = self.repository.sync_guard_state()
+            return {
+                "success": False,
+                "data": None,
+                "message": f"已有超星同步正在运行，锁定至 {guard['lease_until']}。",
+                "error_code": "CHAOXING_SYNC_IN_PROGRESS",
+            }
+
+        loop = asyncio.get_running_loop()
+        login_event = asyncio.Event()
+        login_state: dict[str, int] = {}
+
+        def report_login(course_count: int) -> None:
+            """Runs inside the worker thread once the course list is readable."""
+            login_state["course_count"] = course_count
+            loop.call_soon_threadsafe(login_event.set)
+
+        worker = asyncio.create_task(
+            self._run_leased_worker(phone, password, report_login)
+        )
+        self._worker_task = worker
+        waiter = asyncio.create_task(login_event.wait())
+        try:
+            # asyncio.wait never cancels the worker, even if the caller's own
+            # timeout aborts this await; the background sync always continues.
+            done, _ = await asyncio.wait(
+                {waiter, worker}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            waiter.cancel()
+        if waiter in done:
+            if on_finished is not None:
+
+                def notify(finished: asyncio.Task) -> None:
+                    outcome = self._worker_outcome(finished)
+                    if outcome["success"]:
+                        self.last_error = ""
+                        self.repository.clear_sync_backoff()
+                    asyncio.create_task(on_finished(outcome))
+
+                # add_done_callback still fires when the worker already
+                # finished between the wait and this registration.
+                worker.add_done_callback(notify)
+            return {
+                "success": True,
+                "data": {"course_count": login_state["course_count"]},
+                "message": (
+                    f"超星登录成功，共 {login_state['course_count']} 门课程。"
+                    "任务数据正在后台同步（通常需要几分钟），完成后会主动向"
+                    "用户推送结果；请告知用户稍候，不要重复触发同步。"
+                ),
+                "error_code": None,
+            }
+        if self._worker_task is worker:
+            self._worker_task = None
+        if worker.cancelled():
+            return {
+                "success": False,
+                "data": None,
+                "message": "超星登录阶段被取消。",
+                "error_code": "CHAOXING_REFRESH_FAILED",
+            }
+        error = worker.exception()
+        if isinstance(error, ChaoxingAntiSpiderError):
+            cooldown_hours = max(
+                1, int(self.config.get("antispider_cooldown_hours", 12))
+            )
+            return {
+                "success": False,
+                "data": None,
+                "message": f"超星登录触发反爬限制，已进入 {cooldown_hours} 小时冷却期：{error}",
+                "error_code": "CHAOXING_ANTISPIDER_DETECTED",
+            }
+        self.last_error = str(error)
+        return {
+            "success": False,
+            "data": None,
+            "message": f"超星登录失败：{error}",
+            "error_code": "CHAOXING_LOGIN_FAILED",
+        }
+
+    def _refresh_sync(
+        self,
+        phone: str,
+        password: str,
+        login_callback: Callable[[int], None] | None = None,
+    ) -> dict:
         """Run the synchronous upstream requests outside AstrBot's event loop.
 
         Args:
             phone: Chaoxing login phone number.
             password: Chaoxing password from runtime configuration.
+            login_callback: Optional callable invoked with the course count as
+                soon as the authenticated course list is readable, before the
+                slower per-course extraction begins.
 
         Returns:
             Synchronization counts suitable for user-facing status.
@@ -193,6 +366,8 @@ class ChaoxingProvider:
             chaoxing_api.login(session, phone, password, timeout)
             self._session = session
             courses = chaoxing_api.get_courses(session, timeout)
+        if login_callback:
+            login_callback(len(courses))
         refreshed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tasks: list[dict] = []
         errors: list[str] = []
