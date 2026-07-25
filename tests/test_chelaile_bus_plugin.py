@@ -51,10 +51,11 @@ def test_decrypt_result_round_trips_aes_ecb_payload():
 
 
 class StubProvider:
-    def __init__(self, lines=None, stations=None, buses=None, error=None):
+    def __init__(self, lines=None, stations=None, buses=None, search=None, error=None):
         self.lines = lines or []
         self.stations = stations or {}
         self.buses = buses or {}
+        self.search = search or {"stations": [], "pois": []}
         self.error = error
 
     async def search_lines(self, number, city_id):
@@ -65,10 +66,13 @@ class StubProvider:
     async def get_line_stations(self, line_id, city_id):
         return self.stations.get(line_id, [])
 
-    async def get_realtime_buses(
-        self, line_id, station_id, target_order, lat, lng, city_id
-    ):
+    async def get_realtime_buses(self, line_id, station_id, target_order, lat, lng, city_id):
         return self.buses.get(line_id, [])
+
+    async def search_stations(self, keyword, city_id):
+        if self.error:
+            raise self.error
+        return self.search
 
 
 def _line(line_id="L1", name="368路"):
@@ -145,6 +149,56 @@ async def test_query_arrivals_reports_unknown_line():
 
 
 @pytest.mark.asyncio
+async def test_query_arrivals_coerces_non_string_arguments():
+    provider = StubProvider(
+        lines=[_line()],
+        stations={"L1": [_station()]},
+        buses={"L1": []},
+    )
+    service = BusService(load_plugin_config(None), provider)
+
+    result = await service.query_arrivals(76, "苏州桥南")
+
+    assert result["success"] is True
+    assert result["data"]["line"] == "76"
+
+
+@pytest.mark.asyncio
+async def test_query_arrivals_uses_unique_fuzzy_station_candidate():
+    provider = StubProvider(
+        lines=[_line()],
+        stations={"L1": [_station(), _station(stop_number=11, name="人民大学")]},
+        buses={"L1": []},
+    )
+    service = BusService(load_plugin_config(None), provider)
+
+    result = await service.query_arrivals("368", "苏州桥")
+
+    assert result["success"] is True
+    assert result["data"]["directions"][0]["matched_station"] == "苏州桥南"
+
+
+@pytest.mark.asyncio
+async def test_query_arrivals_reports_ambiguous_fuzzy_station():
+    provider = StubProvider(
+        lines=[_line()],
+        stations={
+            "L1": [
+                _station(name="翠微路口北"),
+                _station(stop_number=11, name="翠微路口南"),
+            ]
+        },
+    )
+    service = BusService(load_plugin_config(None), provider)
+
+    result = await service.query_arrivals("368", "翠微路口")
+
+    assert result["success"] is False
+    assert result["error_code"] == "BUS_STATION_AMBIGUOUS"
+    assert result["data"]["fuzzy_candidates"] == ["翠微路口北", "翠微路口南"]
+
+
+@pytest.mark.asyncio
 async def test_query_arrivals_reports_unknown_station_with_choices():
     provider = StubProvider(
         lines=[_line()],
@@ -169,6 +223,70 @@ async def test_query_arrivals_disabled_returns_clear_message():
 
     assert result["success"] is False
     assert result["error_code"] == "BUS_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_search_stations_returns_candidates():
+    provider = StubProvider(
+        search={
+            "stations": [
+                {"station_id": "010-1731", "name": "翠微路口", "lat": 39.9, "lng": 116.3}
+            ],
+            "pois": [
+                {"name": "复兴路/翠微路(路口)", "address": "海淀区-复兴路辅路", "tag": "路口", "lat": 39.9, "lng": 116.3}
+            ],
+        }
+    )
+    service = BusService(load_plugin_config(None), provider)
+
+    result = await service.search_stations("翠微路口")
+
+    assert result["success"] is True
+    assert result["data"]["stations"][0]["name"] == "翠微路口"
+    assert result["data"]["pois"][0]["tag"] == "路口"
+
+
+@pytest.mark.asyncio
+async def test_search_stations_reports_empty_result():
+    service = BusService(load_plugin_config(None), StubProvider())
+
+    result = await service.search_stations("不存在的地方")
+
+    assert result["success"] is False
+    assert result["error_code"] == "BUS_STATION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_search_stations_rejects_blank_keyword():
+    service = BusService(load_plugin_config(None), StubProvider())
+
+    result = await service.search_stations("  ")
+
+    assert result["success"] is False
+    assert result["error_code"] == "BUS_INVALID_ARGUMENT"
+
+
+def test_formatter_notes_fuzzy_matched_station():
+    result = {
+        "success": True,
+        "message": "查询成功。",
+        "data": {
+            "line": "368",
+            "station": "苏州桥",
+            "city_id": "027",
+            "directions": [
+                {
+                    "caption": "368路(起点-终点)",
+                    "matched_station": "苏州桥南",
+                    "buses": [],
+                }
+            ],
+        },
+    }
+
+    text = format_bus_arrivals(result)
+
+    assert "368路(起点-终点)（按「苏州桥南」查询）" in text
 
 
 def test_formatter_renders_two_buses():

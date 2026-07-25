@@ -3,4 +3,4 @@ display_name: 车来了公交到站查询插件
 author: macroladlezilla
 description: 基于车来了开放接口的 AstrBot 插件，查询公交线路在指定站点的实时距站距离、预计行驶时长与预计到站时间。
 short_desc: 公交实时到站查询助手。
-version: 0.1.0
+version: 0.2.0

@@ -32,24 +32,28 @@ class BusService:
 
         Returns:
             A result dict from make_result. On success data contains line,
-            station, city_id and directions; each direction holds a caption
-            and up to max_buses approaching buses with distance_meters,
-            station_left, travel_time_seconds and expected_arrival_time.
+            station, city_id and directions; each direction holds a caption,
+            the matched_station actually used, and up to max_buses
+            approaching buses with distance_meters, station_left,
+            travel_time_seconds and expected_arrival_time. When no exact
+            station match exists, a single substring candidate is used
+            directly, while multiple candidates fail with
+            BUS_STATION_AMBIGUOUS and a fuzzy_candidates list.
         """
         bus_cfg = self.config["bus"]
         if not bus_cfg.get("enabled", True) or self.provider is None:
             return make_result(
                 False, message="公交查询功能未启用。", error_code="BUS_DISABLED"
             )
-        line = (line or "").strip()
-        station = (station or "").strip()
+        line = str(line or "").strip()
+        station = str(station or "").strip()
         if not line or not station:
             return make_result(
                 False,
                 message="请提供公交线路号和站点名称。",
                 error_code="BUS_INVALID_ARGUMENT",
             )
-        city = (city_id or "").strip() or str(bus_cfg.get("city_id", "027"))
+        city = str(city_id or "").strip() or str(bus_cfg.get("city_id", "027"))
         max_buses = max(1, int(bus_cfg.get("max_buses", 2)))
 
         try:
@@ -69,6 +73,7 @@ class BusService:
 
         directions = []
         station_choices = []
+        fuzzy_candidates: list[str] = []
         errors = []
         for line_info in lines:
             try:
@@ -86,7 +91,20 @@ class BusService:
             )
             matched = next((s for s in stations if s["stop_name"] == station), None)
             if matched is None:
-                continue
+                fuzzy = list(
+                    dict.fromkeys(
+                        s["stop_name"]
+                        for s in stations
+                        if station in s["stop_name"] or s["stop_name"] in station
+                    )
+                )
+                if len(fuzzy) == 1:
+                    matched = next(s for s in stations if s["stop_name"] == fuzzy[0])
+                else:
+                    for name in fuzzy:
+                        if name not in fuzzy_candidates:
+                            fuzzy_candidates.append(name)
+                    continue
             try:
                 buses = await self.provider.get_realtime_buses(
                     line_info["line_id"],
@@ -102,6 +120,7 @@ class BusService:
             directions.append(
                 {
                     "caption": line_info["caption"],
+                    "matched_station": matched["stop_name"],
                     "buses": self._normalize_buses(
                         buses, matched["stop_number"], max_buses
                     ),
@@ -109,6 +128,20 @@ class BusService:
             )
 
         if not directions:
+            if fuzzy_candidates:
+                return make_result(
+                    False,
+                    data={
+                        "directions": station_choices,
+                        "fuzzy_candidates": fuzzy_candidates,
+                    },
+                    message=(
+                        f"「{station}」匹配到多个站点："
+                        f"{'、'.join(fuzzy_candidates)}，"
+                        "请使用完整站点名称重新查询。"
+                    ),
+                    error_code="BUS_STATION_AMBIGUOUS",
+                )
             if station_choices and not errors:
                 return make_result(
                     False,
@@ -140,6 +173,51 @@ class BusService:
                 "city_id": city,
                 "directions": directions,
             },
+            message="查询成功。",
+        )
+
+    async def search_stations(self, keyword: str, city_id: str = "") -> dict[str, Any]:
+        """Search candidate bus stations and POIs by a fuzzy keyword.
+
+        Args:
+            keyword: Fuzzy station or place name.
+            city_id: Optional chelaile city ID overriding the configured default.
+
+        Returns:
+            A result dict from make_result. On success data contains keyword,
+            city_id, stations and pois candidate lists.
+        """
+        bus_cfg = self.config["bus"]
+        if not bus_cfg.get("enabled", True) or self.provider is None:
+            return make_result(
+                False, message="公交查询功能未启用。", error_code="BUS_DISABLED"
+            )
+        keyword = str(keyword or "").strip()
+        if not keyword:
+            return make_result(
+                False,
+                message="请提供检索关键词。",
+                error_code="BUS_INVALID_ARGUMENT",
+            )
+        city = str(city_id or "").strip() or str(bus_cfg.get("city_id", "027"))
+        try:
+            data = await self.provider.search_stations(keyword, city)
+        except UPSTREAM_ERRORS as exc:
+            return make_result(
+                False,
+                message=f"公交站点检索失败：{exc}",
+                error_code="BUS_UPSTREAM_ERROR",
+            )
+        if not data["stations"] and not data["pois"]:
+            return make_result(
+                False,
+                data={"keyword": keyword, "city_id": city, **data},
+                message=f"没有找到与「{keyword}」相关的公交站或地点。",
+                error_code="BUS_STATION_NOT_FOUND",
+            )
+        return make_result(
+            True,
+            data={"keyword": keyword, "city_id": city, **data},
             message="查询成功。",
         )
 

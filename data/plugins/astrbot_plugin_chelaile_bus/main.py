@@ -16,7 +16,7 @@ from .utils.permission_utils import ensure_general_access
     "astrbot_plugin_chelaile_bus",
     "macroladlezilla",
     "车来了公交实时到站查询插件",
-    "0.1.0",
+    "0.2.0",
 )
 class ChelaileBusPlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -43,6 +43,7 @@ class ChelaileBusPlugin(star.Star):
                 "公交查询命令",
                 "/公交 <线路号> <站点名称>",
                 "例如：/公交 368 苏州桥南",
+                "站点名称支持模糊匹配，匹配到多个站点时会返回候选列表。",
                 "也可以直接发消息问我，例如“368 路到苏州桥南还有几站”。",
             ]
         )
@@ -69,11 +70,11 @@ class ChelaileBusPlugin(star.Star):
     async def tool_query_bus_arrival(
         self, _context, line: str = "", station: str = "", city_id: str = ""
     ) -> str:
-        """查询指定公交线路在某一站点的实时到站信息，包括距站距离、剩余站数、预计行驶时长和预计到站时间。
+        """查询指定公交线路在某一站点的实时到站信息，包括距站距离、剩余站数、预计行驶时长和预计到站时间。站点名称支持模糊匹配：匹配到唯一候选时自动使用，匹配到多个候选时返回候选列表。
 
         Args:
-            line(string): 公交线路号，例如 368
-            station(string): 公交站点名称，例如 苏州桥南
+            line(string): 公交线路号，必须以字符串形式传入，例如 "368"
+            station(string): 公交站点名称，例如 "苏州桥南"，不要求完全精确
             city_id(string): 可选，车来了城市 ID，留空时使用插件默认配置
         """
         if not self.config["llm"].get("enable_tools", True):
@@ -83,5 +84,25 @@ class ChelaileBusPlugin(star.Star):
             )
         return json.dumps(
             await self.bus_service.query_arrivals(line, station, city_id),
+            ensure_ascii=False,
+        )
+
+    @llm_tool("search_bus_station")
+    async def tool_search_bus_station(
+        self, _context, keyword: str = "", city_id: str = ""
+    ) -> str:
+        """按模糊关键词检索公交站和附近地点，用于在查询实时公交前确认准确的站点名称。
+
+        Args:
+            keyword(string): 模糊地名或站点关键词，必须以字符串形式传入，例如 "翠微路口"
+            city_id(string): 可选，车来了城市 ID，留空时使用插件默认配置
+        """
+        if not self.config["llm"].get("enable_tools", True):
+            return json.dumps(
+                {"success": False, "message": "公交查询 LLM 工具未启用。"},
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            await self.bus_service.search_stations(keyword, city_id),
             ensure_ascii=False,
         )

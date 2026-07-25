@@ -41,7 +41,11 @@ def format_bus_arrivals(result: dict[str, Any]) -> str:
     data = result["data"]
     lines = [f"{data['station']} 站实时到站"]
     for direction in data["directions"]:
-        lines.append(direction["caption"])
+        caption = direction["caption"]
+        matched_station = direction.get("matched_station")
+        if matched_station and matched_station != data["station"]:
+            caption = f"{caption}（按「{matched_station}」查询）"
+        lines.append(caption)
         buses = direction["buses"]
         if not buses:
             lines.append("  暂无车辆到站信息")

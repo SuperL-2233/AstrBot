@@ -180,6 +180,51 @@ class ChelaileProvider:
             )
         return lines
 
+    async def search_stations(
+        self, keyword: str, city_id: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search stations and POIs by a free-text keyword.
+
+        Args:
+            keyword: Fuzzy station or place name, e.g. "翠微路口".
+            city_id: Chelaile city ID.
+
+        Returns:
+            A dict with stations (station_id, name, lat, lng) and pois
+            (name, address, tag, lat, lng), with subway entries filtered out.
+        """
+        data = await self._request(
+            "query!nSearch.action",
+            {
+                "cityId": city_id,
+                "localCityId": city_id,
+                "key": keyword,
+                "supportPhyStn": "true",
+            },
+        )
+        result = data.get("result", {})
+        stations = [
+            {
+                "station_id": s.get("sId"),
+                "name": s.get("sn"),
+                "lat": s.get("lat"),
+                "lng": s.get("lng"),
+            }
+            for s in result.get("stations", [])
+            if s.get("subwayV2") != 1
+        ]
+        pois = [
+            {
+                "name": poi.get("sn1") or poi.get("sn"),
+                "address": poi.get("sn1Address") or poi.get("address"),
+                "tag": poi.get("sn1Tag"),
+                "lat": poi.get("lat"),
+                "lng": poi.get("lng"),
+            }
+            for poi in result.get("pois", [])
+        ]
+        return {"stations": stations, "pois": pois}
+
     async def get_line_stations(
         self, line_id: str, city_id: str
     ) -> list[dict[str, Any]]:
