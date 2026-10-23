@@ -82,11 +82,17 @@ class ClassReminderService:
         return None
 
     def semester_start_source(self) -> str:
-        """Describe where the semester start date comes from, for status display."""
+        """Describe the date source used by class reminders.
+
+        Returns:
+            The manual, mportal, timetable or none source label.
+        """
         if str(self.config.get("semester_start_date", "")).strip():
             return "manual"
         if self._semester_start() is not None:
             return "mportal"
+        if self.weekly.get_timetable().get("week_dates"):
+            return "timetable"
         return "none"
 
     def _teaching_week(self, now: datetime, stored: dict[str, Any]) -> int | None:
@@ -125,19 +131,19 @@ class ClassReminderService:
 
         Returns:
             Occurrences that triggered a reminder during this check. Empty
-            when reminders are disabled, the semester start date is not
-            configured, or no class is due within the lead window.
+            when reminders are disabled, timetable dates and the semester
+            start are both unknown, or no class is due within the lead window.
         """
         if not self.config.get("class_reminder_enabled", True):
             return []
         tz = ZoneInfo(str(self.config.get("timezone", "Asia/Shanghai")))
-        now = now or datetime.now(tz)
-        stored = self.weekly.get_timetable()
+        now = now.astimezone(tz) if now is not None else datetime.now(tz)
+        stored = self.weekly.get_timetable(on_date=now.date())
         week = self._teaching_week(now, stored)
         if week is None:
             return []
         lead_seconds = (
-            max(1, int(self.config.get("class_reminder_lead_minutes", 30))) * 60
+            max(1, int(self.config.get("class_reminder_lead_minutes", 15))) * 60
         )
         section_times = self.config.get("section_start_times", {})
         sent = self._load_sent()
@@ -153,9 +159,11 @@ class ClassReminderService:
                 continue
             try:
                 hour, minute = (int(part) for part in str(raw_time).split(":"))
+                class_start = now.replace(
+                    hour=hour, minute=minute, second=0, microsecond=0
+                )
             except ValueError:
                 continue
-            class_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             delta = (class_start - now).total_seconds()
             if not 0 <= delta <= lead_seconds:
                 continue
@@ -169,11 +177,17 @@ class ClassReminderService:
             message = format_class_reminder(
                 occurrence, class_start.strftime("%H:%M"), minutes
             )
-            if await self.push(message):
+            try:
+                delivered = await self.push(message)
+            except Exception as error:
+                logger.warning(
+                    "Class reminder delivery failed: %s", safe_exception_name(error)
+                )
+                continue
+            if delivered:
                 sent.add(key)
+                self._save_sent(sent, now.date().isoformat())
                 pushed.append(occurrence)
-        if pushed:
-            self._save_sent(sent, now.date().isoformat())
         return pushed
 
     async def _run_loop(self) -> None:
@@ -182,7 +196,9 @@ class ClassReminderService:
             try:
                 pushed = await self.check_once()
                 if pushed:
-                    logger.info("已推送 %d 条上课提醒", len(pushed))
+                    logger.info("Delivered %d class reminders", len(pushed))
             except Exception as error:
-                logger.warning("上课提醒检查异常：%s", safe_exception_name(error))
+                logger.warning(
+                    "Class reminder check failed: %s", safe_exception_name(error)
+                )
             await asyncio.sleep(interval)

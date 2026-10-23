@@ -80,6 +80,9 @@ def format_class_reminder(entry: dict[str, Any], start_time: str, minutes: int) 
         entry: One weekly-timetable occurrence with course fields.
         start_time: Class start clock time as HH:MM.
         minutes: Minutes remaining until the class starts.
+
+    Returns:
+        The reminder text including the course, time and location.
     """
     teacher = entry.get("teacher", "")
     teacher_text = f"（{teacher}）" if teacher else ""
@@ -226,9 +229,15 @@ def format_status(status: dict[str, Any]) -> str:
         reminder += "（开学日期：手动配置）"
     elif start_source == "mportal":
         reminder += "（开学日期：mportal 自动）"
+    elif start_source == "timetable":
+        reminder += "（日期：周课表自动）"
     else:
         reminder += "（开学日期未知，提醒不生效）"
     lines.append(f"上课提醒：{reminder}")
+    if "class_reminder_lead_minutes" in status:
+        lines.append(
+            f"提醒时间：每门课开始前 {status['class_reminder_lead_minutes']} 分钟"
+        )
     lines.append(
         "已存数据：课表 {courses} 条 / 成绩 {scores} 条 / 考试 {exams} 条".format(
             courses=status.get("courses_count", 0),

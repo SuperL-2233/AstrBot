@@ -174,6 +174,7 @@ class CugbJwglPlugin(star.Star):
             "scores_count": self.repo.count("scores"),
             "exams_count": self.repo.count("exams"),
             "class_reminder_running": self.reminder_service.running,
+            "class_reminder_lead_minutes": self.config["class_reminder_lead_minutes"],
             "semester_start_source": self.reminder_service.semester_start_source(),
             "weekly_source": stored.get("source", ""),
             "weekly_validation": self.weekly_service.get_validation_report() or {},

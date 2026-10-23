@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 from ..core.jwgl_core import utc_iso
+from ..core.mportal_client import TERM_CODE_TO_LABEL
 from ..core.weekly_schedule import (
     WEEKDAY_LABELS,
     WeeklyTimetable,
@@ -158,7 +160,9 @@ class WeeklyScheduleService:
         """Persist the mportal scan hash for one period."""
         self.repo.set_meta(_term_hash_key(period), digest)
 
-    def get_timetable(self, period: str = "") -> dict[str, Any]:
+    def get_timetable(
+        self, period: str = "", *, on_date: date | None = None
+    ) -> dict[str, Any]:
         """Load a persisted weekly timetable, generating the default when missing.
 
         Args:
@@ -166,10 +170,27 @@ class WeeklyScheduleService:
                 when the term was never scanned). Otherwise load the default
                 (current period) payload, lazily generating it from the jwgl
                 free text when absent.
+            on_date: When no period is given, prefer a cached timetable
+                covering this date, even if the last poll used an older term.
 
         Returns:
             The timetable payload dict (may be empty for unknown terms).
         """
+        if on_date is not None and not period:
+            current = self.get_timetable()
+            today = on_date.isoformat()
+            if any(today in dates for dates in current.get("week_dates", {}).values()):
+                return current
+            for entry in (self.get_term_info() or {}).get("termInfo", []):
+                label = TERM_CODE_TO_LABEL.get(entry.get("term"))
+                if not label:
+                    continue
+                candidate = self.get_timetable(f"{entry.get('year')} {label}")
+                if any(
+                    today in dates for dates in candidate.get("week_dates", {}).values()
+                ):
+                    return candidate
+            return current
         if period:
             raw = self.repo.get_meta(_term_key(period), "")
             if raw:

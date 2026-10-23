@@ -329,6 +329,37 @@ def _reminder_config(**overrides):
 
 
 @pytest.mark.asyncio
+async def test_reminder_uses_cached_term_for_today_when_last_poll_term_is_old(tmp_path):
+    repo = SnapshotRepository(tmp_path / "jwgl.sqlite")
+    repo.set_meta("current_period", "2026 夏")
+    weekly = WeeklyScheduleService(repo)
+    weekly.save_term_info(TERM_INFO)
+    weekly.regenerate_mportal(
+        "2026 夏", {1: {"weekdays": ["2026-07-06"], "occurrences": []}}
+    )
+    weekly.regenerate_mportal(
+        "2026 秋", {1: parse_week_payload(_week_body(_cell("示例课程")))}
+    )
+    sent: list[str] = []
+
+    async def push(text: str) -> bool:
+        sent.append(text)
+        return True
+
+    service = ClassReminderService(
+        _reminder_config(class_reminder_lead_minutes=15), weekly, repo, push
+    )
+    now = datetime(2026, 9, 14, 9, 35, tzinfo=TZ)
+    assert weekly.get_timetable()["period"] == "2026 夏"
+    assert weekly.get_timetable(on_date=now.date())["period"] == "2026 秋"
+    assert len(await service.check_once(now)) == 1
+    assert "示例课程" in sent[0] and "15 分钟后" in sent[0]
+    assert await service.check_once(now) == []
+    assert repo.get_meta("current_period") == "2026 夏"
+    repo.close()
+
+
+@pytest.mark.asyncio
 async def test_reminder_uses_week_dates_without_manual_start(tmp_path):
     repo = SnapshotRepository(tmp_path / "jwgl.sqlite")
     repo.set_meta("current_period", "2026 秋")
@@ -343,6 +374,7 @@ async def test_reminder_uses_week_dates_without_manual_start(tmp_path):
         return True
 
     service = ClassReminderService(_reminder_config(), weekly, repo, push)
+    assert service.semester_start_source() == "timetable"
     # 2026-09-14 是 mportal 第1周周一；示例课程第3-4节 09:50 开始。
     before = datetime(2026, 9, 14, 9, 19, tzinfo=TZ)
     assert await service.check_once(before) == []

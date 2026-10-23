@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from astrbot_plugin_cugb_jwgl.core.weekly_schedule import (
     structure_course_record,
 )
 from astrbot_plugin_cugb_jwgl.formatters.jwgl_formatter import (
+    format_status,
     format_week_courses,
     format_weekly_overview,
 )
@@ -25,6 +27,7 @@ from astrbot_plugin_cugb_jwgl.services.reminder_service import ClassReminderServ
 from astrbot_plugin_cugb_jwgl.services.weekly_schedule_service import (
     WeeklyScheduleService,
 )
+from astrbot_plugin_cugb_jwgl.utils.config_loader import load_plugin_config
 
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -243,7 +246,7 @@ async def test_poll_regenerates_weekly_timetable_only_on_course_change(tmp_path)
 def _reminder_config(**overrides):
     config = {
         "class_reminder_enabled": True,
-        "class_reminder_lead_minutes": 30,
+        "class_reminder_lead_minutes": 15,
         "class_reminder_check_seconds": 60,
         "semester_start_date": "2025-09-01",
         "section_start_times": {"3": "09:50", "4": "10:40"},
@@ -267,17 +270,174 @@ async def test_class_reminder_pushes_within_lead_window_and_dedupes(tmp_path):
     sent: list[str] = []
     service = _reminder_service(repo, _reminder_config(), sent)
     # 2025-09-08 is the Monday of teaching week 2; 高等数学 is 第3-4节 (09:50).
-    before_window = datetime(2025, 9, 8, 9, 19, tzinfo=TZ)
+    before_window = datetime(2025, 9, 8, 9, 34, 59, tzinfo=TZ)
     assert await service.check_once(before_window) == []
-    in_window = datetime(2025, 9, 8, 9, 20, tzinfo=TZ)
+    in_window = datetime(2025, 9, 8, 9, 35, tzinfo=TZ)
     pushed = await service.check_once(in_window)
     assert len(pushed) == 1
     assert "高等数学A(1)" in sent[0]
     assert "09:50" in sent[0]
     assert "综合楼402" in sent[0]
+    assert "15 分钟后" in sent[0]
     assert await service.check_once(in_window) == []
     assert len(sent) == 1
     repo.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("omit_lead_setting", [False, True])
+async def test_default_reminder_is_15_minutes_for_each_course(
+    tmp_path, omit_lead_setting
+):
+    repo = _seed_repo(tmp_path / "jwgl.sqlite")
+    repo.diff_and_update(
+        "courses",
+        [_record("大学英语", "1-17周 星期一 第6-7节 教5楼515")],
+        lambda record: f"2025 秋|{record['课程号']}||{record['课程名称']}",
+    )
+    config = load_plugin_config({"semester_start_date": "2025-09-01"})
+    if omit_lead_setting:
+        config.pop("class_reminder_lead_minutes")
+    sent: list[str] = []
+    service = _reminder_service(repo, config, sent)
+    assert await service.check_once(datetime(2025, 9, 8, 9, 34, 59, tzinfo=TZ)) == []
+    assert len(await service.check_once(datetime(2025, 9, 8, 9, 35, tzinfo=TZ))) == 1
+    assert "高等数学A(1)" in sent[0] and "15 分钟后" in sent[0]
+    # A consecutive class block receives one reminder before its first section.
+    assert await service.check_once(datetime(2025, 9, 8, 10, 25, tzinfo=TZ)) == []
+    assert await service.check_once(datetime(2025, 9, 8, 13, 14, 59, tzinfo=TZ)) == []
+    assert len(await service.check_once(datetime(2025, 9, 8, 13, 15, tzinfo=TZ))) == 1
+    assert "大学英语" in sent[1] and "13:30" in sent[1] and "教5楼515" in sent[1]
+    assert len(sent) == 2
+    repo.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["false", "exception"])
+async def test_class_reminder_retries_failed_delivery_without_repeating_successes(
+    tmp_path, failure
+):
+    path = tmp_path / "jwgl.sqlite"
+    repo = _seed_repo(path)
+    repo.diff_and_update(
+        "courses",
+        [_record("失败课程", "1-17周 星期一 第3-4节 综合楼202")],
+        lambda record: f"2025 秋|{record['课程号']}||{record['课程名称']}",
+    )
+    sent: list[str] = []
+
+    async def push(text: str) -> bool:
+        if "失败课程" in text:
+            if failure == "exception":
+                raise RuntimeError("Delivery failed")
+            return False
+        sent.append(text)
+        return True
+
+    now = datetime(2025, 9, 8, 9, 35, tzinfo=TZ)
+    service = ClassReminderService(
+        _reminder_config(), WeeklyScheduleService(repo), repo, push
+    )
+    pushed = await service.check_once(now)
+    assert [entry["course_name"] for entry in pushed] == ["高等数学A(1)"]
+    assert len(sent) == 1
+    repo.close()
+
+    repo = SnapshotRepository(path)
+    resumed = _reminder_service(repo, _reminder_config(), sent)
+    retried = await resumed.check_once(datetime(2025, 9, 8, 9, 36, tzinfo=TZ))
+    assert [entry["course_name"] for entry in retried] == ["失败课程"]
+    assert len(sent) == 2
+    assert await resumed.check_once(now) == []
+    repo.close()
+
+
+@pytest.mark.asyncio
+async def test_class_reminder_persists_success_before_later_delivery_is_cancelled(tmp_path):
+    path = tmp_path / "jwgl.sqlite"
+    repo = SnapshotRepository(path)
+    repo.set_meta("current_period", "2025 秋")
+    repo.diff_and_update(
+        "courses",
+        [
+            _record("First course", "1-17周 星期一 第3-4节 综合楼101"),
+            _record("Second course", "1-17周 星期一 第3-4节 综合楼102"),
+        ],
+        lambda record: f"2025 秋|{record['课程名称']}",
+    )
+    sent: list[str] = []
+
+    async def push(text: str) -> bool:
+        if "Second course" in text:
+            raise asyncio.CancelledError
+        sent.append(text)
+        return True
+
+    now = datetime(2025, 9, 8, 9, 35, tzinfo=TZ)
+    service = ClassReminderService(
+        _reminder_config(), WeeklyScheduleService(repo), repo, push
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await service.check_once(now)
+    assert len(sent) == 1 and "First course" in sent[0]
+    repo.close()
+
+    repo = SnapshotRepository(path)
+    resumed = _reminder_service(repo, _reminder_config(), sent)
+    pushed = await resumed.check_once(now)
+    assert [entry["course_name"] for entry in pushed] == ["Second course"]
+    assert len(sent) == 2
+    repo.close()
+
+
+@pytest.mark.asyncio
+async def test_class_reminder_does_not_send_after_class_starts(tmp_path):
+    repo = _seed_repo(tmp_path / "jwgl.sqlite")
+    sent: list[str] = []
+    service = _reminder_service(repo, _reminder_config(), sent)
+    assert await service.check_once(datetime(2025, 9, 8, 9, 50, 1, tzinfo=TZ)) == []
+    assert sent == []
+    repo.close()
+
+
+@pytest.mark.asyncio
+async def test_class_reminder_normalizes_current_time_to_configured_timezone(tmp_path):
+    repo = _seed_repo(tmp_path / "jwgl.sqlite")
+    sent: list[str] = []
+    service = _reminder_service(repo, _reminder_config(), sent)
+    now = datetime(2025, 9, 8, 1, 35, tzinfo=ZoneInfo("UTC"))
+    assert len(await service.check_once(now)) == 1
+    assert "09:50" in sent[0] and "15 分钟后" in sent[0]
+    repo.close()
+
+
+@pytest.mark.asyncio
+async def test_class_reminder_invalid_section_time_does_not_block_other_courses(tmp_path):
+    repo = _seed_repo(tmp_path / "jwgl.sqlite")
+    repo.diff_and_update(
+        "courses",
+        [_record("大学英语", "1-17周 星期一 第6-7节 教5楼515")],
+        lambda record: f"2025 秋|{record['课程号']}||{record['课程名称']}",
+    )
+    config = _reminder_config(section_start_times={"3": "25:00", "6": "09:50"})
+    sent: list[str] = []
+    service = _reminder_service(repo, config, sent)
+    pushed = await service.check_once(datetime(2025, 9, 8, 9, 35, tzinfo=TZ))
+    assert [entry["course_name"] for entry in pushed] == ["大学英语"]
+    repo.close()
+
+
+def test_class_reminder_status_shows_lead_time_and_timetable_date_source():
+    text = format_status(
+        {
+            "class_reminder_running": True,
+            "class_reminder_lead_minutes": 15,
+            "semester_start_source": "timetable",
+        }
+    )
+    assert "上课提醒：运行中（日期：周课表自动）" in text
+    assert "每门课开始前 15 分钟" in text
+    assert "提醒不生效" not in text
 
 
 @pytest.mark.asyncio

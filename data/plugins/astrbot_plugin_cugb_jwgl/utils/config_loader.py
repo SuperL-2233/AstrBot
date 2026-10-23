@@ -26,7 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mportal_enabled": True,
     "mportal_base_url": "https://mportal.cugb.edu.cn",
     "class_reminder_enabled": True,
-    "class_reminder_lead_minutes": 30,
+    "class_reminder_lead_minutes": 15,
     "class_reminder_check_seconds": 60,
     "semester_start_date": "",
     "section_start_times": {

@@ -112,7 +112,7 @@
   "class_reminder_lead_minutes": {
     "type": "int",
     "description": "每节课开始前多少分钟推送提醒",
-    "default": 30
+    "default": 15
   },
   "class_reminder_check_seconds": {
     "type": "int",
