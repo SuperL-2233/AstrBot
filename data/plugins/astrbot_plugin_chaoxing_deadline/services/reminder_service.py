@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ..repositories.task_repository import TaskRepository
+from ..utils.config_loader import DEFAULT_CONFIG
 
 
 class ReminderService:
-    DEFAULT_OFFSETS_HOURS = [168, 120, 72, 24, 5, 2, 1]
+    DEFAULT_OFFSETS_HOURS = DEFAULT_CONFIG["reminder_offsets_hours"]
 
     def __init__(self, config: dict, repository: TaskRepository) -> None:
         self.config = config
         self.repository = repository
+        self.timezone = ZoneInfo(config.get("timezone", "Asia/Shanghai"))
 
     def bind(self, target_umo: str) -> None:
         self.repository.set_target_umo(target_umo.strip())
@@ -24,6 +28,7 @@ class ReminderService:
             "enabled": bool(self.config.get("reminder_enabled", True)),
             "target_bound": bool(self.repository.get_target_umo()),
             "offsets_hours": self.offsets_hours(),
+            "timezone": str(self.timezone),
             "scan_interval_minutes": max(
                 1, int(self.config.get("reminder_scan_interval_minutes", 5))
             ),
@@ -43,8 +48,18 @@ class ReminderService:
         return sorted(normalized or self.DEFAULT_OFFSETS_HOURS, reverse=True)
 
     def sync_schedule(self, now: datetime | None = None) -> int:
-        """Synchronize every pending, dated, non-ignored task into reminder stages."""
-        return self.repository.sync_reminder_schedule(self.offsets_hours(), now)
+        """Reconcile future stages and the latest elapsed stage in local time.
+
+        Args:
+            now: Optional current time; naive values use the configured timezone.
+
+        Returns:
+            Number of newly scheduled stages.
+        """
+        current = now or datetime.now(self.timezone)
+        if current.tzinfo is not None:
+            current = current.astimezone(self.timezone).replace(tzinfo=None)
+        return self.repository.sync_reminder_schedule(self.offsets_hours(), current)
 
     def set_tracking(
         self,
@@ -116,14 +131,31 @@ class ReminderService:
         send_message: Callable[[str, str], Awaitable[bool]],
         now: datetime | None = None,
     ) -> dict:
+        """Send due stages once, retaining failed or cancelled sends for retry.
+
+        Args:
+            send_message: AstrBot delivery callback returning adapter success.
+            now: Optional current time; naive values use the configured timezone.
+
+        Returns:
+            Delivery status and the number of stages sent.
+
+        Raises:
+            Exception: If the delivery callback fails or returns false.
+            asyncio.CancelledError: If delivery is cancelled during shutdown.
+        """
         if not self.config.get("reminder_enabled", True):
             return {"success": False, "message": "超星截止提醒未启用。", "sent": 0}
+        current = now or datetime.now(self.timezone)
+        if current.tzinfo is not None:
+            current = current.astimezone(self.timezone).replace(tzinfo=None)
+        self.sync_schedule(current)
         target = self.repository.get_target_umo()
         if not target:
             return {"success": False, "message": "尚未绑定提醒私聊。", "sent": 0}
 
         claimed: list[tuple[str, dict]] = []
-        for task in self.repository.due_scheduled_reminders(now):
+        for task in self.repository.due_scheduled_reminders(current):
             reminder_key = task["schedule_key"]
             if self.repository.claim_reminder(reminder_key):
                 claimed.append((reminder_key, task))
@@ -138,15 +170,21 @@ class ReminderService:
                 if offset >= 24 and offset % 24 == 0
                 else f"{offset} 小时"
             )
+            remaining = (
+                datetime.strptime(task["deadline"], "%Y-%m-%d %H:%M:%S") - current
+            )
+            remaining_minutes = max(1, int(remaining.total_seconds() / 60))
             lines.append(
                 f"[{task['task_type']}][截止前 {stage}] "
-                f"{task['course_name']} - {task['title']}\n截止：{task['deadline']}"
+                f"{task['course_name']} - {task['title']}\n"
+                f"截止：{task['deadline']}（{self.timezone}）\n"
+                f"当前剩余：{remaining_minutes // 60} 小时 {remaining_minutes % 60} 分钟"
             )
         try:
             sent = await send_message(target, "\n\n".join(lines))
             if not sent:
-                raise RuntimeError("AstrBot 未找到目标会话对应的平台适配器")
-        except Exception:
+                raise RuntimeError("AstrBot could not find the target platform adapter")
+        except (Exception, asyncio.CancelledError):
             for reminder_key, _ in claimed:
                 self.repository.release_reminder(reminder_key)
             raise

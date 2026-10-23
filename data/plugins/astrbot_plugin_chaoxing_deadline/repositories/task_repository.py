@@ -313,13 +313,24 @@ class TaskRepository:
     def sync_reminder_schedule(
         self, offsets_hours: list[int], now: datetime | None = None
     ) -> int:
+        """Replace obsolete pending stages and retain only one catch-up stage.
+
+        Args:
+            offsets_hours: Positive reminder lead times in hours.
+            now: Current time in the deadline timezone, without timezone metadata.
+
+        Returns:
+            Number of newly inserted stages.
+        """
         current = now or datetime.now()
         now_text = current.strftime("%Y-%m-%d %H:%M:%S")
         with self._connect() as connection:
             connection.execute(
-                """
+                f"""
                 DELETE FROM reminder_schedule
-                WHERE status = 'scheduled' AND NOT EXISTS (
+                WHERE status = 'scheduled' AND (
+                  offset_hours NOT IN ({",".join("?" for _ in offsets_hours)})
+                  OR NOT EXISTS (
                     SELECT 1 FROM tasks
                     LEFT JOIN reminder_ignores ON reminder_ignores.task_key = tasks.task_key
                     WHERE tasks.task_key = reminder_schedule.task_key
@@ -327,9 +338,10 @@ class TaskRepository:
                       AND tasks.deadline = reminder_schedule.deadline
                       AND tasks.deadline > ?
                       AND reminder_ignores.task_key IS NULL
+                  )
                 )
                 """,
-                (now_text,),
+                (*offsets_hours, now_text),
             )
             tasks = connection.execute(
                 """
@@ -349,13 +361,27 @@ class TaskRepository:
                     deadline = datetime.strptime(task["deadline"], "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     continue
+                # A newly discovered task or a restart catches up only the
+                # latest threshold, avoiding a burst of obsolete reminders.
+                catch_up_offset = next(
+                    (
+                        offset
+                        for offset in sorted(offsets_hours)
+                        if deadline - timedelta(hours=offset) <= current
+                    ),
+                    None,
+                )
                 for offset_hours in offsets_hours:
                     due_at = deadline - timedelta(hours=offset_hours)
-                    if due_at <= current:
-                        continue
                     schedule_key = (
                         f"{task['task_key']}|{task['deadline']}|{offset_hours}"
                     )
+                    if due_at <= current and offset_hours != catch_up_offset:
+                        connection.execute(
+                            "DELETE FROM reminder_schedule WHERE schedule_key = ? AND status = 'scheduled'",
+                            (schedule_key,),
+                        )
+                        continue
                     cursor = connection.execute(
                         """
                         INSERT OR IGNORE INTO reminder_schedule(
@@ -457,8 +483,8 @@ class TaskRepository:
     def reminder_schedule_status(self) -> dict:
         with self._connect() as connection:
             scheduled = connection.execute(
-                "SELECT COUNT(*) AS count FROM reminder_schedule WHERE status = 'scheduled'"
-            ).fetchone()["count"]
+                "SELECT COUNT(*) AS count, MIN(due_at) AS next_due_at FROM reminder_schedule WHERE status = 'scheduled'"
+            ).fetchone()
             delivered = connection.execute(
                 "SELECT COUNT(*) AS count FROM reminder_schedule WHERE status = 'delivered'"
             ).fetchone()["count"]
@@ -466,7 +492,8 @@ class TaskRepository:
                 "SELECT COUNT(*) AS count FROM reminder_ignores"
             ).fetchone()["count"]
         return {
-            "scheduled_stages": int(scheduled),
+            "scheduled_stages": int(scheduled["count"]),
+            "next_due_at": scheduled["next_due_at"],
             "delivered_stages": int(delivered),
             "ignored_tasks": int(ignored),
         }

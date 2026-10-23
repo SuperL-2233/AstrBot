@@ -49,13 +49,18 @@
     "description": "是否启用截止提醒",
     "default": true
   },
+  "timezone": {
+    "type": "string",
+    "description": "学习通截止时间使用的时区",
+    "default": "Asia/Shanghai"
+  },
   "reminder_offsets_hours": {
     "type": "list",
     "items": {
       "type": "int"
     },
-    "description": "所有带截止时间且未完成项目的分阶段提醒小时数",
-    "default": [168, 120, 72, 24, 5, 2, 1]
+    "description": "所有带截止时间且未完成项目的分阶段提醒小时数（默认提前 3 天、2 天、1 天、12 小时、1 小时；旧默认值自动迁移）",
+    "default": [72, 48, 24, 12, 1]
   },
   "reminder_scan_interval_minutes": {
     "type": "int",

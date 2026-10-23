@@ -22,7 +22,7 @@ from .utils.permission import ensure_private_chat
     "astrbot_plugin_chaoxing_deadline",
     "macroladlezilla",
     "超星学习通助手",
-    "0.4.2",
+    "0.4.3",
 )
 class ChaoxingDeadlinePlugin(star.Star):
     def __init__(self, context: star.Context, config: dict | None = None) -> None:
@@ -51,6 +51,11 @@ class ChaoxingDeadlinePlugin(star.Star):
         if self.config.get("reminder_enabled", True):
             self._reminder_task = asyncio.create_task(self._run_reminder_loop())
             logger.info("Chaoxing reminder scan loop started")
+            if not self.reminder_service.status()["target_bound"]:
+                logger.warning(
+                    "Chaoxing reminders have no target; bind the intended QQ private "
+                    "chat with /超星提醒绑定 (weather binding is independent)"
+                )
 
     async def terminate(self) -> None:
         if self._refresh_task:
@@ -116,7 +121,8 @@ class ChaoxingDeadlinePlugin(star.Star):
                 "作业、视频章节和讨论分类查询",
                 "明确截止时间查询",
                 "查询前 24 小时缓存新鲜度检查与自动同步",
-                "所有带截止日期任务的多阶段 QQ 私聊提醒",
+                "截止前 3 天、2 天、1 天、12 小时、1 小时的 QQ 私聊提醒",
+                "新发现任务和重启后补发当前阶段，失败可重试",
                 "按任务取消或恢复提醒跟踪",
             ],
             "commands": [
@@ -128,6 +134,8 @@ class ChaoxingDeadlinePlugin(star.Star):
                 "/超星忽略",
                 "/超星恢复",
                 "/超星状态",
+                "/超星提醒绑定",
+                "/超星提醒解绑",
             ],
             "llm_tools": [
                 "get_chaoxing_tasks",
@@ -154,7 +162,9 @@ class ChaoxingDeadlinePlugin(star.Star):
             "/超星忽略 [课程或任务关键词]\n"
             "/超星恢复 [课程或任务关键词]\n"
             "/超星提醒绑定\n"
-            "/超星提醒解绑"
+            "/超星提醒解绑\n"
+            "默认在截止前 3 天、2 天、1 天、12 小时、1 小时提醒；"
+            "天气推送和超星提醒需要分别绑定。"
         )
 
     @filter.command("超星状态")
@@ -166,6 +176,7 @@ class ChaoxingDeadlinePlugin(star.Star):
                 status["task"],
                 status["reminder"],
                 status["refresh_loop_running"],
+                status["reminder_loop_running"],
             )
         )
 

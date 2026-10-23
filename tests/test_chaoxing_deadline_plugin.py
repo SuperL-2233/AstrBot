@@ -1,20 +1,22 @@
 import asyncio
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import requests
-
 
 PLUGIN_PARENT = Path(__file__).resolve().parents[1] / "data" / "plugins"
 if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
+from astrbot_plugin_chaoxing_deadline.formatters.task_formatter import format_status
+from astrbot_plugin_chaoxing_deadline.main import ChaoxingDeadlinePlugin
 from astrbot_plugin_chaoxing_deadline.providers import (
     chaoxing_provider as provider_module,
 )
-from astrbot_plugin_chaoxing_deadline.main import ChaoxingDeadlinePlugin
 from astrbot_plugin_chaoxing_deadline.providers.chaoxing_provider import (
     ChaoxingProvider,
 )
@@ -91,6 +93,24 @@ def test_task_queries_support_pending_completed_all_and_type_filters(tmp_path):
 
 def test_configuration_does_not_require_owner_qq_id():
     assert "owner_qq_id" not in load_plugin_config(None)
+
+
+@pytest.mark.parametrize(
+    "saved", [None, {"reminder_offsets_hours": [168, 120, 72, 24, 5, 2, 1]}]
+)
+def test_default_reminder_stages_and_legacy_configuration(saved):
+    config = load_plugin_config(saved)
+
+    assert config["reminder_offsets_hours"] == [72, 48, 24, 12, 1]
+    assert config["timezone"] == "Asia/Shanghai"
+    if saved:
+        assert saved["reminder_offsets_hours"] == [168, 120, 72, 24, 5, 2, 1]
+
+
+def test_custom_reminder_stages_are_preserved():
+    config = load_plugin_config({"reminder_offsets_hours": [96, 6]})
+
+    assert config["reminder_offsets_hours"] == [96, 6]
 
 
 def test_only_reminder_binding_requires_private_chat():
@@ -293,6 +313,243 @@ async def test_failed_reminder_can_be_retried(tmp_path):
     assert result["sent"] == 1
 
 
+@pytest.mark.asyncio
+async def test_all_five_reminder_boundaries_are_delivered_once(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    deadline = datetime(2030, 1, 5, 12)
+    repository.replace_tasks([task(deadline.strftime("%Y-%m-%d %H:%M:%S"))])
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(load_plugin_config(None), repository)
+    service.sync_schedule(deadline - timedelta(days=4))
+    send = AsyncMock(return_value=True)
+
+    for hours, label in (
+        (72, "3 天"),
+        (48, "2 天"),
+        (24, "1 天"),
+        (12, "12 小时"),
+        (1, "1 小时"),
+    ):
+        boundary = deadline - timedelta(hours=hours)
+        assert (await service.deliver_due(send, boundary - timedelta(seconds=1)))[
+            "sent"
+        ] == 0
+        assert (await service.deliver_due(send, boundary))["sent"] == 1
+        assert (await service.deliver_due(send, boundary + timedelta(seconds=1)))[
+            "sent"
+        ] == 0
+        target, text = send.call_args.args
+        assert target == "qq:FriendMessage:test"
+        assert f"[截止前 {label}]" in text
+        assert f"当前剩余：{hours} 小时 0 分钟" in text
+        assert "2030-01-05 12:00:00（Asia/Shanghai）" in text
+
+    assert send.await_count == 5
+    assert service.status()["scheduled_stages"] == 0
+    assert service.status()["delivered_stages"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "remaining_hours, label",
+    [(60, "3 天"), (36, "2 天"), (18, "1 天"), (8, "12 小时"), (0.5, "1 小时")],
+)
+async def test_newly_discovered_task_catches_up_only_current_stage(
+    tmp_path, remaining_hours, label
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    current = datetime(2030, 1, 1, 12)
+    deadline = current + timedelta(hours=remaining_hours)
+    repository.replace_tasks([task(deadline.strftime("%Y-%m-%d %H:%M:%S"))])
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(load_plugin_config(None), repository)
+    send = AsyncMock(return_value=True)
+
+    assert (await service.deliver_due(send, current))["sent"] == 1
+    assert (await service.deliver_due(send, current))["sent"] == 0
+    send.assert_awaited_once()
+    assert send.call_args.args[1].count("[截止前") == 1
+    assert f"[截止前 {label}]" in send.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_restart_coalesces_missed_stages_and_preserves_delivery_history(tmp_path):
+    path = tmp_path / "tasks.sqlite"
+    repository = TaskRepository(path)
+    deadline = datetime(2030, 1, 5, 12)
+    repository.replace_tasks([task(deadline.strftime("%Y-%m-%d %H:%M:%S"))])
+    repository.set_target_umo("qq:FriendMessage:test")
+    ReminderService(load_plugin_config(None), repository).sync_schedule(
+        deadline - timedelta(days=4)
+    )
+
+    restarted = ReminderService(load_plugin_config(None), TaskRepository(path))
+    send = AsyncMock(return_value=True)
+    assert (await restarted.deliver_due(send, deadline - timedelta(hours=18)))[
+        "sent"
+    ] == 1
+    assert "[截止前 1 天]" in send.call_args.args[1]
+    assert restarted.status()["scheduled_stages"] == 2
+
+    reopened = ReminderService(load_plugin_config(None), TaskRepository(path))
+    assert (await reopened.deliver_due(send, deadline - timedelta(hours=18)))[
+        "sent"
+    ] == 0
+    assert (await reopened.deliver_due(send, deadline - timedelta(hours=8)))[
+        "sent"
+    ] == 1
+    assert "[截止前 12 小时]" in send.call_args.args[1]
+    assert (await reopened.deliver_due(send, deadline))["sent"] == 0
+    assert reopened.status()["scheduled_stages"] == 0
+    assert reopened.status()["delivered_stages"] == 2
+
+
+def test_migration_replaces_legacy_pending_stages(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    current = datetime(2030, 1, 1, 12)
+    deadline = current + timedelta(days=10)
+    repository.replace_tasks([task(deadline.strftime("%Y-%m-%d %H:%M:%S"))])
+    legacy = {"reminder_offsets_hours": [168, 120, 72, 24, 5, 2, 1]}
+    ReminderService(legacy, repository).sync_schedule(current)
+    assert repository.reminder_schedule_status()["scheduled_stages"] == 7
+
+    service = ReminderService(load_plugin_config(legacy), repository)
+    service.sync_schedule(current)
+
+    with repository._connect() as connection:
+        offsets = [
+            row["offset_hours"]
+            for row in connection.execute(
+                "SELECT offset_hours FROM reminder_schedule WHERE status = 'scheduled' ORDER BY offset_hours DESC"
+            )
+        ]
+    assert offsets == [72, 48, 24, 12, 1]
+    assert service.status()["next_due_at"] == "2030-01-08 12:00:00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, asyncio.CancelledError()])
+async def test_false_or_cancelled_delivery_releases_claim_for_retry(tmp_path, failure):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    current = datetime(2030, 1, 1, 12)
+    repository.replace_tasks([task("2030-01-01 12:30:00")])
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(load_plugin_config(None), repository)
+    send = (
+        AsyncMock(return_value=failure)
+        if failure is False
+        else AsyncMock(side_effect=failure)
+    )
+
+    with pytest.raises(RuntimeError if failure is False else asyncio.CancelledError):
+        await service.deliver_due(send, current)
+
+    retry = AsyncMock(return_value=True)
+    assert (await service.deliver_due(retry, current))["sent"] == 1
+    assert (await service.deliver_due(retry, current))["sent"] == 0
+
+
+@pytest.mark.asyncio
+async def test_aware_timestamps_use_deadline_timezone(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    repository.replace_tasks([task("2030-01-01 10:00:00")])
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(
+        {"reminder_offsets_hours": [1], "timezone": "Asia/Shanghai"}, repository
+    )
+    send = AsyncMock(return_value=True)
+
+    assert (
+        await service.deliver_due(
+            send, datetime(2030, 1, 1, 0, 59, tzinfo=timezone.utc)
+        )
+    )["sent"] == 0
+    assert (
+        await service.deliver_due(send, datetime(2030, 1, 1, 1, tzinfo=timezone.utc))
+    )["sent"] == 1
+    assert "当前剩余：1 小时 0 分钟" in send.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_binding_is_required_and_delivery_uses_astrbot_message_path(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    repository.replace_tasks([task("2030-01-01 12:30:00")])
+    service = ReminderService(load_plugin_config(None), repository)
+    current = datetime(2030, 1, 1, 12)
+    plugin = object.__new__(ChaoxingDeadlinePlugin)
+    plugin.context = SimpleNamespace(send_message=AsyncMock(return_value=True))
+
+    result = await service.deliver_due(plugin._send_message, current)
+    assert result["success"] is False
+    assert "尚未绑定" in result["message"]
+    plugin.context.send_message.assert_not_awaited()
+
+    service.bind("qq:FriendMessage:test")
+    assert (await service.deliver_due(plugin._send_message, current))["sent"] == 1
+    target, chain = plugin.context.send_message.call_args.args
+    assert target == "qq:FriendMessage:test"
+    assert "超星学习通截止提醒" in chain.chain[0].text
+    assert "测试作业" in chain.chain[0].text
+
+
+@pytest.mark.asyncio
+async def test_scan_reconciles_completion_ignores_and_invalid_deadlines(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    current = datetime(2030, 1, 1, 12)
+    records = [
+        task("2030-01-01 12:30:00", suffix=suffix)
+        for suffix in ("待办", "完成", "忽略", "删除", "过期", "无日期", "无效日期")
+    ]
+    repository.replace_tasks(records)
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(load_plugin_config(None), repository)
+    service.sync_schedule(current - timedelta(days=4))
+    records[1]["status"] = "completed"
+    repository.set_task_ignored(records[2]["task_key"], True)
+    records[4]["deadline"] = "2030-01-01 12:00:00"
+    records[5]["deadline"] = ""
+    records[6]["deadline"] = "unknown"
+    repository.replace_tasks(
+        [record for record in records if record["task_key"] != records[3]["task_key"]]
+    )
+    send = AsyncMock(return_value=True)
+
+    assert (await service.deliver_due(send, current))["sent"] == 1
+    assert "测试作业待办" in send.call_args.args[1]
+    assert service.status()["scheduled_stages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_deadline_change_replaces_pending_stages(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    original = task("2030-01-05 12:00:00")
+    repository.replace_tasks([original])
+    repository.set_target_umo("qq:FriendMessage:test")
+    service = ReminderService(load_plugin_config(None), repository)
+    send = AsyncMock(return_value=True)
+    assert (await service.deliver_due(send, datetime(2030, 1, 2, 12)))["sent"] == 1
+
+    repository.replace_tasks([dict(original, deadline="2030-01-06 12:00:00")])
+    assert (await service.deliver_due(send, datetime(2030, 1, 3, 12)))["sent"] == 1
+    assert send.call_args.args[1].count("[截止前") == 1
+    assert "[截止前 3 天]" in send.call_args.args[1]
+    assert "2030-01-06 12:00:00" in send.call_args.args[1]
+
+
+def test_status_explains_independent_binding_and_scan_readiness(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    service = ReminderService(load_plugin_config(None), repository)
+    text = format_status(
+        {"enabled": True, "credentials_configured": True}, service.status(), True, True
+    )
+
+    assert "提醒扫描：运行中" in text
+    assert "72, 48, 24, 12, 1" in text
+    assert "Asia/Shanghai" in text
+    assert "天气推送绑定不会绑定超星提醒" in text
+    assert "/超星提醒绑定" in text
+
+
 def test_schedule_covers_every_pending_dated_type_and_respects_tracking(tmp_path):
     repository = TaskRepository(tmp_path / "tasks.sqlite")
     base = datetime.now().replace(microsecond=0)
@@ -312,21 +569,21 @@ def test_schedule_covers_every_pending_dated_type_and_respects_tracking(tmp_path
     )
     service = ReminderService({"reminder_enabled": True}, repository)
 
-    assert service.sync_schedule(base) == 28
-    assert service.status()["scheduled_stages"] == 28
+    assert service.sync_schedule(base) == 20
+    assert service.status()["scheduled_stages"] == 20
 
     ignored = service.set_tracking(tracked=False, keyword="测试视频", reason="选做")
     assert ignored["success"] is True
-    assert service.status()["scheduled_stages"] == 21
+    assert service.status()["scheduled_stages"] == 15
     assert service.status()["ignored_tasks"] == 1
 
     repository.replace_tasks(pending)
     service.sync_schedule(base)
-    assert service.status()["scheduled_stages"] == 21
+    assert service.status()["scheduled_stages"] == 15
 
     restored = service.set_tracking(tracked=True, task_key=ignored["data"]["task_key"])
     assert restored["success"] is True
-    assert service.status()["scheduled_stages"] == 28
+    assert service.status()["scheduled_stages"] == 20
 
 
 def test_refresh_removes_future_stages_for_completed_task(tmp_path):
@@ -337,7 +594,7 @@ def test_refresh_removes_future_stages_for_completed_task(tmp_path):
     repository.replace_tasks([pending])
     service = ReminderService({"reminder_enabled": True}, repository)
     service.sync_schedule(base)
-    assert service.status()["scheduled_stages"] == 7
+    assert service.status()["scheduled_stages"] == 5
 
     completed = dict(pending, status="completed")
     repository.replace_tasks([completed])
@@ -389,7 +646,7 @@ async def test_stale_query_refreshes_cloud_once_and_rebuilds_schedule(tmp_path):
     assert second["cache_refresh"]["attempted"] is False
     assert calls == 1
     assert callbacks == 1
-    assert reminder.status()["scheduled_stages"] == 7
+    assert reminder.status()["scheduled_stages"] == 5
 
 
 @pytest.mark.asyncio
@@ -724,7 +981,7 @@ async def test_detached_service_syncs_cache_and_rebuilds_schedule(
     tasks = repository.query_tasks(task_status="")
     assert len(tasks) == 1
     assert tasks[0]["title"] == "作业一"
-    assert reminder.status()["scheduled_stages"] == 7
+    assert reminder.status()["scheduled_stages"] == 5
 
 
 @pytest.mark.asyncio

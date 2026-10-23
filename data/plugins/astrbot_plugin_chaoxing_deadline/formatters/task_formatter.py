@@ -17,7 +17,12 @@ def format_tasks(result: dict, title: str) -> str:
     return "\n".join(lines)
 
 
-def format_status(task_status: dict, reminder_status: dict, loop_running: bool) -> str:
+def format_status(
+    task_status: dict,
+    reminder_status: dict,
+    loop_running: bool,
+    reminder_loop_running: bool,
+) -> str:
     counts = task_status.get("counts", {})
     cache = task_status.get("cache", {})
     sync_guard = task_status.get("sync_guard", {})
@@ -34,7 +39,16 @@ def format_status(task_status: dict, reminder_status: dict, loop_running: bool) 
             f"同步互斥：{'占用至 ' + str(sync_guard.get('lease_until')) if sync_guard.get('lease_active') else '空闲'}",
             f"反爬冷却：{'持续至 ' + str(sync_guard.get('backoff_until')) if sync_guard.get('backoff_active') else '无'}",
             f"提醒：{'已启用' if reminder_status['enabled'] else '未启用'}，目标{'已绑定' if reminder_status['target_bound'] else '未绑定'}",
+            f"提醒扫描：{'运行中' if reminder_loop_running else '未运行'}",
             f"提醒阶段（小时）：{offsets}；每 {reminder_status['scan_interval_minutes']} 分钟扫描",
+            f"提醒时区：{reminder_status['timezone']}",
+            f"提醒计划：待推送 {reminder_status['scheduled_stages']}，已推送 {reminder_status['delivered_stages']}，忽略任务 {reminder_status['ignored_tasks']}",
+            f"下次计划：{reminder_status.get('next_due_at') or '无'}",
+            (
+                "接收目标：当前绑定私聊（与天气推送分别绑定）"
+                if reminder_status["target_bound"]
+                else "请在接收提醒的 QQ 私聊发送 /超星提醒绑定；天气推送绑定不会绑定超星提醒。"
+            ),
             f"最近错误：{task_status.get('last_error') or '无'}",
         )
     )
