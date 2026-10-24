@@ -1,7 +1,8 @@
+import json
 import re
 from decimal import Decimal
 
-from astrbot.api import star
+from astrbot.api import llm_tool, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -67,7 +68,7 @@ class FileTransferPlugin(star.Star):
                 "/快传撤销",
                 "/快传状态",
             ],
-            "llm_tools": [],
+            "llm_tools": ["create_file_transfer_grant"],
         }
 
     def get_public_status(self) -> dict:
@@ -101,12 +102,12 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(error)
             return
         yield event.plain_result(
-            "私人文件快传\n/快传授权 [总量] [保留分钟]\n例如：/快传授权 5G 60\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/快传列表\n/快传撤销 <完整批次ID>\n/快传状态"
+            "私人文件快传\n/快传授权 [总量] [保留分钟]\n例如：/快传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的快传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/快传列表\n/快传撤销 <完整批次ID>\n/快传状态"
         )
 
     @filter.command("快传授权")
     async def authorize(self, event: AstrMessageEvent, args: GreedyStr):
-        """Parse immutable quota and retention settings, then request a grant.
+        """Issue a grant through the same authorization path used by the tool.
 
         Args:
             event: Owner-private command event.
@@ -115,20 +116,61 @@ class FileTransferPlugin(star.Star):
         Yields:
             A new upload grant or a bounded validation/service error.
         """
+        result = await self._create_grant(event, str(args).split())
+        yield event.plain_result(result["message"])
+
+    @llm_tool("create_file_transfer_grant")
+    async def tool_create_grant(
+        self,
+        event: AstrMessageEvent,
+        total_size: str = "2G",
+        retention_minutes: int = 30,
+    ) -> str:
+        """Create a private file-transfer upload grant when the owner requests one.
+
+        Use for requests such as 帮我开一个快传授权 or 生成5G、保留60分钟的上传密钥.
+        Only the configured owner's private chat may issue a grant. Each call
+        creates a new one-time upload key, so call once per requested grant.
+        Omitted settings mean 2GB total and 30 minutes of retention after upload
+        finalization. Redemption lasts one hour; the upload window is 30 minutes.
+        Relay the returned entrance and upload key exactly; failures issue no key.
+
+        Args:
+            total_size(string): Total batch quota, such as "2G", "500M" or "5GB".
+                Decimal units are used; the maximum is 10GB.
+            retention_minutes(number): Positive whole retention duration in minutes
+                after the uploaded batch is finalized; defaults to 30.
+
+        Returns:
+            JSON with success and an owner-facing authorization or error message.
+        """
+        result = await self._create_grant(
+            event, [str(total_size), str(retention_minutes)]
+        )
+        return json.dumps(result, ensure_ascii=False)
+
+    async def _create_grant(self, event: AstrMessageEvent, parts: list[str]) -> dict:
+        """Authorize and validate one grant request without retrying issuance.
+
+        Args:
+            event: AstrBot-authenticated sender and chat context, never model input.
+            parts: Separate size and retention arguments, preserving tool boundaries.
+
+        Returns:
+            A success flag and the formatted grant or a bounded failure message.
+        """
         error = self._access_error(event)
         if error:
-            yield event.plain_result(error)
-            return
-        parts = str(args).split()
+            return {"success": False, "message": error}
         size = re.fullmatch(
             r"(\d+(?:\.\d+)?)(B|KB|MB|GB|K|M|G)?", parts[0].upper() if parts else "2G"
         )
         minutes = parts[1] if len(parts) > 1 else "30"
         if len(parts) > 2 or not size or not minutes.isascii() or not minutes.isdigit():
-            yield event.plain_result(
-                "用法：/快传授权 [总量，例如 2G] [保留分钟，例如 30]"
-            )
-            return
+            return {
+                "success": False,
+                "message": "用法：/快传授权 [总量，例如 2G] [保留分钟，例如 30]",
+            }
         units = {
             "B": 1,
             "K": 1000,
@@ -145,19 +187,19 @@ class FileTransferPlugin(star.Star):
             or not 1 <= quota <= 10_000_000_000
             or not 1 <= retention <= 2**31 - 1
         ):
-            yield event.plain_result(
-                "整批额度必须大于 0 且不超过 10GB，保留分钟必须为正整数。"
-            )
-            return
+            return {
+                "success": False,
+                "message": "整批额度必须大于 0 且不超过 10GB，保留分钟必须为正整数。",
+            }
         try:
             result = await self.provider.request(
                 "POST",
                 "/admin/grants",
                 {"quota_bytes": int(quota), "retention_seconds": retention},
             )
-            yield event.plain_result(format_grant(result))
+            return {"success": True, "message": format_grant(result)}
         except TransferProviderError as exc:
-            yield event.plain_result(str(exc))
+            return {"success": False, "message": str(exc)}
 
     @filter.command("快传列表")
     async def list_command(self, event: AstrMessageEvent):

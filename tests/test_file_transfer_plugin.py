@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,12 +12,16 @@ PLUGIN_PARENT = Path(__file__).resolve().parents[1] / "data" / "plugins"
 if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
-from astrbot.core.star.filter.command import CommandFilter, GreedyStr
 from astrbot_plugin_file_transfer.main import FileTransferPlugin
 from astrbot_plugin_file_transfer.providers.transfer_provider import (
     TransferProvider,
     TransferProviderError,
 )
+
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.astr_agent_tool_exec import call_local_llm_tool
+from astrbot.core.provider.register import llm_tools
+from astrbot.core.star.filter.command import CommandFilter, GreedyStr
 
 
 class Event:
@@ -142,8 +147,113 @@ async def test_disabled_and_unavailable_service_never_issue_fake_keys(plugin):
     assert [text async for text in plugin.authorize(Event(), "")] == [
         "无法连接快传服务"
     ]
-    assert plugin.get_public_capabilities()["llm_tools"] == []
+    assert plugin.get_public_capabilities()["llm_tools"] == [
+        "create_file_transfer_grant"
+    ]
     assert "admin_token" not in plugin.get_public_status()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings,quota,retention",
+    [
+        ({}, 2_000_000_000, 1800),
+        ({"total_size": "5G", "retention_minutes": 60}, 5_000_000_000, 3600),
+        ({"total_size": "0.5G", "retention_minutes": 15}, 500_000_000, 900),
+        ({"total_size": "10GB"}, 10_000_000_000, 1800),
+        ({"total_size": "50M"}, 50_000_000, 1800),
+    ],
+)
+async def test_grant_tool_defaults_and_settings(plugin, settings, quota, retention):
+    result = json.loads(await plugin.tool_create_grant(Event(), **settings))
+    plugin.provider.request.assert_awaited_once_with(
+        "POST", "/admin/grants", {"quota_bytes": quota, "retention_seconds": retention}
+    )
+    assert result["success"] is True
+    assert "https://example.com/transfer/" in result["message"]
+    assert "U-test-only-key" in result["message"]
+    assert plugin.config["admin_token"] not in result["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sender,private,enabled,owner,allowed",
+    [
+        ("other", True, True, "owner", False),
+        ("owner", False, True, "owner", False),
+        ("owner", True, True, "", False),
+        ("owner", True, False, "owner", False),
+        ("owner", True, True, "owner", True),
+    ],
+)
+async def test_grant_tool_checks_framework_event_before_contacting_service(
+    plugin, sender, private, enabled, owner, allowed
+):
+    plugin.config.update(enabled=enabled, owner_qq_id=owner)
+    context = ContextWrapper(context=SimpleNamespace(event=Event(sender, private)))
+    responses = [
+        result
+        async for result in call_local_llm_tool(
+            context,
+            plugin.tool_create_grant,
+            "decorator_handler",
+            total_size="5G",
+            retention_minutes=60,
+        )
+    ]
+    result = json.loads(responses[0])
+    assert result["success"] is allowed
+    if allowed:
+        plugin.provider.request.assert_awaited_once_with(
+            "POST",
+            "/admin/grants",
+            {"quota_bytes": 5_000_000_000, "retention_seconds": 3600},
+        )
+        assert "U-test-only-key" in result["message"]
+    else:
+        assert "U-test-only-key" not in result["message"]
+        plugin.provider.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"total_size": "11G"},
+        {"total_size": "0G"},
+        {"total_size": "0.1B"},
+        {"total_size": ""},
+        {"total_size": " "},
+        {"total_size": "5G 60"},
+        {"retention_minutes": 0},
+        {"retention_minutes": -1},
+        {"retention_minutes": 1.5},
+        {"retention_minutes": True},
+        {"retention_minutes": None},
+        {"retention_minutes": 999_999_999_999_999_999_999},
+    ],
+)
+async def test_invalid_grant_tool_settings_never_contact_service(plugin, settings):
+    result = json.loads(await plugin.tool_create_grant(Event(), **settings))
+    assert result["success"] is False
+    assert result["message"]
+    plugin.provider.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_grant_tool_reports_service_failure_without_retry_or_fake_key(plugin):
+    plugin.provider.request.side_effect = TransferProviderError("无法连接快传服务")
+    result = json.loads(await plugin.tool_create_grant(Event()))
+    assert result == {"success": False, "message": "无法连接快传服务"}
+    assert plugin.provider.request.await_count == 1
+
+
+def test_grant_tool_schema_has_settings_but_no_model_supplied_identity():
+    tool = llm_tools.get_func("create_file_transfer_grant")
+    assert tool is not None
+    assert set(tool.parameters["properties"]) == {"total_size", "retention_minutes"}
+    assert tool.parameters["properties"]["total_size"]["type"] == "string"
+    assert tool.parameters["properties"]["retention_minutes"]["type"] == "number"
 
 
 def test_greedy_command_parameters_preserve_defaults_and_reject_extra_text():
