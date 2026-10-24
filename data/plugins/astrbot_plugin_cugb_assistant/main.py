@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import suppress
 
 from astrbot.api import llm_tool, logger, star
@@ -9,6 +8,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 
 from .formatters.classroom_formatter import (
     format_classroom_list,
+    format_classroom_tool_result,
     format_recommendations,
 )
 from .providers.classroom_cache_provider import ClassroomCacheProvider
@@ -214,9 +214,8 @@ class CugbAssistantPlugin(star.Star):
         Args:
             building(string): 可选，教学楼名称
         """
-        return json.dumps(
-            await self.classroom_service.get_empty_classrooms_now(building),
-            ensure_ascii=False,
+        return format_classroom_tool_result(
+            await self.classroom_service.get_empty_classrooms_now(building)
         )
 
     @llm_tool("get_empty_classrooms_by_time")
@@ -238,11 +237,10 @@ class CugbAssistantPlugin(star.Star):
             end_time = combine_date_time(today_local(), end_time).strftime(
                 "%Y-%m-%d %H:%M"
             )
-        return json.dumps(
+        return format_classroom_tool_result(
             await self.classroom_service.get_empty_classrooms_by_time(
                 building, start_time, end_time
-            ),
-            ensure_ascii=False,
+            )
         )
 
     @llm_tool("recommend_study_room")
@@ -251,18 +249,28 @@ class CugbAssistantPlugin(star.Star):
         _context,
         start_time: str = "",
         end_time: str = "",
-        current_location: str = "",
         next_course_location: str = "",
+        limit: int = 5,
     ) -> str:
-        """推荐自习教室。
+        """Recommend study rooms in priority order.
 
         Args:
-            start_time(string): 可选，开始时间
-            end_time(string): 可选，结束时间
-            current_location(string): 可选，当前位置
-            next_course_location(string): 可选，下一节课地点
+            start_time(string): HH:MM or YYYY-MM-DD HH:MM; blank queries now.
+            end_time(string): Same format; supply both times.
+            next_course_location(string): Optional next class room.
+            limit(number): Max rooms, default 5; zero returns all.
+
+        Returns:
+            JSON with ranked rooms, shared query metadata and any source error.
         """
-        _ = current_location
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            return format_classroom_tool_result(
+                {
+                    "success": False,
+                    "message": "limit 必须为非负整数；0 表示返回全部。",
+                    "error_code": "INVALID_LIMIT",
+                }
+            )
         if start_time and len(start_time) == 5:
             start_time = combine_date_time(today_local(), start_time).strftime(
                 "%Y-%m-%d %H:%M"
@@ -278,11 +286,11 @@ class CugbAssistantPlugin(star.Star):
             if start_time and end_time
             else await self.classroom_service.get_empty_classrooms_now()
         )
-        rows = result["data"] if result["success"] else []
+        if not result["success"]:
+            return format_classroom_tool_result(result)
         data = self.distance_service.recommend(
-            rows, next_course_location=next_course_location
+            result["data"], next_course_location=next_course_location
         )
-        return json.dumps(
-            {"success": True, "data": data, "message": "已返回推荐结果。"},
-            ensure_ascii=False,
+        return format_classroom_tool_result(
+            {**result, "data": data, "message": "已返回推荐结果。"}, limit=limit
         )

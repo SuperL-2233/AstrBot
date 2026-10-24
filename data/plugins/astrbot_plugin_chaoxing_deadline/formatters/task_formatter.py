@@ -1,5 +1,60 @@
 from __future__ import annotations
 
+import json
+
+
+def format_task_tool_result(result: dict) -> str:
+    """Serialize tasks and tracking candidates without persistence internals.
+
+    Args:
+        result: Complete task-query or reminder-tracking service result.
+
+    Returns:
+        Compact JSON retaining task selectors, deadlines and cache failures.
+    """
+    payload = {
+        key: value
+        for key, value in result.items()
+        if key != "cache_refresh" and value is not None
+    }
+    if isinstance(result.get("data"), list):
+        payload["data"] = [
+            {
+                key: task[key]
+                for key in (
+                    "task_key",
+                    "course_name",
+                    "task_type",
+                    "title",
+                    "status",
+                    "deadline",
+                    "start_time",
+                    "url",
+                    "note",
+                    "tracked",
+                )
+                if key in task
+                and (key not in {"start_time", "url", "note"} or task[key])
+            }
+            for task in result["data"]
+        ]
+    refresh = result.get("cache_refresh")
+    if refresh:
+        cache = refresh["cache"]
+        payload["cache"] = {
+            "last_sync_time": cache.get("last_sync_time"),
+            "stale": cache["stale"],
+            "refreshed": refresh["refreshed"],
+        }
+        refresh_result = refresh.get("refresh_result")
+        if refresh_result and not refresh_result["success"]:
+            payload["cache"]["refresh_error"] = {
+                key: refresh_result[key]
+                for key in ("error_code", "message")
+                if refresh_result.get(key)
+            }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
 
 def format_tasks(result: dict, title: str) -> str:
     if not result["success"]:

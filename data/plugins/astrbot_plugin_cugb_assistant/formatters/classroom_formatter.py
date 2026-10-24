@@ -1,5 +1,45 @@
 from __future__ import annotations
 
+import json
+
+
+def format_classroom_tool_result(result: dict, limit: int = 0) -> str:
+    """Serialize classrooms with shared metadata outside individual rows.
+
+    Args:
+        result: Complete service result, including any source failure.
+        limit: Maximum recommendations to return; zero keeps all rows.
+
+    Returns:
+        Compact JSON preserving room order, source status and query metadata.
+    """
+    payload = {
+        key: value for key, value in result.items() if value is not None and value != {}
+    }
+    if result["success"]:
+        rows = [
+            {key: value for key, value in room.items() if key != "priority"}
+            for room in result["data"]
+        ]
+        shared = {}
+        for key in ("start_time", "end_time", "source_update_time", "source"):
+            if (
+                rows
+                and key in rows[0]
+                and all(key in row and row[key] == rows[0][key] for row in rows)
+            ):
+                shared[key] = rows[0][key]
+                for row in rows:
+                    del row[key]
+        if shared:
+            payload["query"] = shared
+        payload["data"] = rows[:limit] if limit else rows
+        if limit:
+            payload["total_count"] = len(rows)
+            payload["returned_count"] = len(payload["data"])
+            payload["has_more"] = len(rows) > limit
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
 
 def format_classroom_list(result: dict, title: str = "空教室") -> str:
     if not result["success"]:

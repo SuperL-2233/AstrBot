@@ -126,28 +126,22 @@ class FileTransferPlugin(star.Star):
         total_size: str = "2G",
         retention_minutes: int = 30,
     ) -> str:
-        """Create a private file-transfer upload grant when the owner requests one.
-
-        Use for requests such as 帮我开一个快传授权 or 生成5G、保留60分钟的上传密钥.
-        Only the configured owner's private chat may issue a grant. Each call
-        creates a new one-time upload key, so call once per requested grant.
-        Omitted settings mean 2GB total and 30 minutes of retention after upload
-        finalization. Redemption lasts one hour; the upload window is 30 minutes.
-        Relay the returned entrance and upload key exactly; failures issue no key.
+        """Create one 快传 upload grant per owner request in owner private chat. Each
+        call creates a new key; call once. Relay entrance/key exactly. Redemption
+        1h, upload window 30m; retention starts after finalization.
 
         Args:
-            total_size(string): Total batch quota, such as "2G", "500M" or "5GB".
-                Decimal units are used; the maximum is 10GB.
-            retention_minutes(number): Positive whole retention duration in minutes
-                after the uploaded batch is finalized; defaults to 30.
+            total_size(string): Batch quota: 2G (default), 500M or 5GB. Decimal
+                units; max 10GB.
+            retention_minutes(number): Positive whole retention minutes; default 30.
 
         Returns:
-            JSON with success and an owner-facing authorization or error message.
+            JSON with success and the authorization or error message.
         """
         result = await self._create_grant(
             event, [str(total_size), str(retention_minutes)]
         )
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     async def _create_grant(self, event: AstrMessageEvent, parts: list[str]) -> dict:
         """Authorize and validate one grant request without retrying issuance.

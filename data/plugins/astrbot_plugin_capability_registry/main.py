@@ -40,13 +40,14 @@ class CapabilityRegistryPlugin(star.Star):
 
     @llm_tool("get_plugin_status")
     async def tool_get_plugin_status(self, _context, plugin_name: str = "") -> str:
-        """查询所有已注册插件，或按名称查询插件的能力和运行状态。
-
-        每个插件都会返回启用状态和元数据；实现公开能力/状态协议的插件还会返回
-        命令、LLM 工具、功能清单和详细运行状态。
+        """Get plugin capabilities and status; blank name lists all. Details depend on
+        plugin support.
 
         Args:
-            plugin_name(string): 可选，插件名称关键词；留空查询全部插件
+            plugin_name(string): Optional plugin-name keyword.
+
+        Returns:
+            JSON with the query or operation result.
         """
         result = await self.registry_service.query(plugin_name)
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))

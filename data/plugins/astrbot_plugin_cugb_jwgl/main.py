@@ -395,49 +395,50 @@ class CugbJwglPlugin(star.Star):
 
     @llm_tool("jwgl_get_status")
     async def tool_get_status(self, _context) -> str:
-        """获取 CUGB 教务监控的运行状态：登录态、轮询循环、推送绑定、最近轮询结果与各模块数据量。
-        login_pending 为 true 表示正在等待用户提交短信验证码，
-        login_stage 进一步区分等待的是教务门户（"portal"）还是 mportal 课表（"mportal"）的验证码。"""
-        return json.dumps(self.get_public_status(), ensure_ascii=False, default=str)
+        """Get academic login/poll/push status and counts. login_pending: awaiting SMS;
+        login_stage: portal/mportal.
+
+        Returns:
+            JSON with the query or operation result.
+        """
+        return json.dumps(
+            self.get_public_status(),
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
 
     @llm_tool("jwgl_get_scores")
     async def tool_get_scores(self, _context, year: str = "", term: str = "") -> str:
-        """Query personal scores, using local snapshots before online requests.
-
-        Omit year and term for the latest cached score period; no status call is
-        needed first. Supply both to query another period. Background polls keep
-        snapshots updated; use jwgl_poll_now only when the user requests a refresh.
-        An uncached period without scores may fall back to the latest scores,
-        with the actual period and a note in the response.
+        """Get scores cache-first; no status query. Omit year/term for latest cached
+        period. Fallbacks label the actual period. Use jwgl_poll_now only for
+        explicit refresh requests.
 
         Args:
-            year(string): Optional natural year, such as "2026"; pair with term.
-            term(string): Optional Chinese term label: 春, 夏 or 秋.
+            year(string): Year, e.g. 2026; supply with term or omit both.
+            term(string): 春/夏/秋; paired with year.
 
         Returns:
-            JSON containing records, their period and snapshot/live source.
+            JSON with the query or operation result.
         """
         return json.dumps(
-            await self._snapshot_or_live("scores", year, term), ensure_ascii=False
+            await self._snapshot_or_live("scores", year, term),
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("jwgl_get_courses")
     async def tool_get_courses(self, _context, year: str = "", term: str = "") -> str:
-        """Query the semester course list from local snapshots first.
-
-        Omit year and term for the current period, including 本学期/这个学期;
-        call this tool directly without a preceding status query. Supply both for
-        another period. For 今天/明天/本周/下周 use jwgl_get_week_courses instead.
-        The schedule fields contain parsed weeks, weekdays, sections and rooms.
-        Validation uses cached mportal data only. Use jwgl_poll_now only when the
-        user explicitly requests fresh data.
+        """Get semester courses cache-first, without a status query. Daily/weekly:
+        jwgl_get_week_courses. Validation is cache-only. Refresh only on explicit
+        request via jwgl_poll_now.
 
         Args:
-            year(string): Optional natural year, such as "2026"; pair with term.
-            term(string): Optional Chinese term label: 春, 夏 or 秋.
+            year(string): Year paired with term; omit both for current semester.
+            term(string): 春/夏/秋; paired with year.
 
         Returns:
-            JSON records with their actual period, source and cached validation.
+            JSON with the query or operation result.
         """
         result = await self._snapshot_or_live("courses", year, term)
         mapped = period_to_year_term(result.get("period", ""))
@@ -447,29 +448,23 @@ class CugbJwglPlugin(star.Star):
             )
             if validation is not None:
                 result["validation"] = validation
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @llm_tool("jwgl_get_week_courses")
     async def tool_get_week_courses(
         self, _context, week: str = "", year: str = "", term: str = ""
     ) -> str:
-        """Query a cached weekly timetable including course dates and rooms.
-
-        For 本周/这周 pass week="current"; for 下周 pass week="next".
-        For 今天/明天 pass week="today"/"tomorrow" to return only that day's
-        courses. Dates and teaching weeks are resolved locally without a status
-        or semester-start query.
-        Omit year and term for the current cached period; supply both for another
-        period. Only an uncached explicit period needs a live full-term scan.
+        """Get cached courses by week/day; no status query. Omit year/term for selected
+        cached period. Only uncached explicit periods need an online term scan.
 
         Args:
-            week(string): "current", "next", "today", "tomorrow", a teaching week
-                number such as "3", or empty for an overview of all weeks.
-            year(string): Optional natural year, such as "2026"; pair with term.
-            term(string): Optional Chinese term label: 春, 夏 or 秋.
+            week(string): current (本周), next (下周), today (今天), tomorrow (明天), a week
+                number, or blank for overview.
+            year(string): Year, e.g. 2026; supply with term or omit both.
+            term(string): 春/夏/秋; paired with year.
 
         Returns:
-            JSON for one week or a compact overview, with its actual period.
+            JSON with the query or operation result.
         """
         today = datetime.now(ZoneInfo(self.config["timezone"])).date()
         target = today + timedelta(
@@ -478,7 +473,9 @@ class CugbJwglPlugin(star.Star):
         result = await self._week_courses_payload(year, term, on_date=target)
         if "error" in result:
             return json.dumps(
-                {"success": False, "message": result["error"]}, ensure_ascii=False
+                {"success": False, "message": result["error"]},
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
         return json.dumps(
             self.weekly_service.query_week_courses(
@@ -488,6 +485,7 @@ class CugbJwglPlugin(star.Star):
                 semester_start_date=self.config.get("semester_start_date", ""),
             ),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("jwgl_get_exams")
@@ -497,49 +495,51 @@ class CugbJwglPlugin(star.Star):
         Returns:
             JSON records with a snapshot/live source label.
         """
-        return json.dumps(await self._snapshot_or_live("exams"), ensure_ascii=False)
+        return json.dumps(
+            await self._snapshot_or_live("exams"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     @llm_tool("jwgl_request_login")
     async def tool_request_login(self, _context, resend: bool = False) -> str:
-        """发起教务系统登录。重要：验证码由学校统一认证平台通过短信发送到用户手机，
-        机器人不发送也不转发验证码；用户收到手机短信后会在当前对话回复 6 位数字，
-        届时必须调用 jwgl_submit_sms_code 工具把验证码提交给学校完成登录。
-        若返回提示"登录流程已在进行中"，说明此前已发起过登录且正在等待验证码，
-        此时不要重复发起，直接让用户回复手机收到的最新验证码即可；
-        只有当用户明确说没收到短信、要求重发时，才把 resend 填为 true 重新发送
-        （学校限制 60 秒重发间隔，工具会自动等待冷却结束后发出）。
-        返回结果会说明流程是否真正发起成功，请把返回内容如实转告用户。
+        """Start school SMS login. If pending, ask for latest code; do not restart.
+        Resend only on user request (60s cooldown). Submit the user's code with
+        jwgl_submit_sms_code; relay actual results.
 
         Args:
-            resend(boolean): 已在等待验证码但用户明确说没收到短信时填 true 重发
+            resend(boolean): true only if the user explicitly requests a new SMS.
+
+        Returns:
+            JSON with the query or operation result.
         """
         message = await self.consent_service.request_login(resend=resend)
-        return json.dumps({"message": message}, ensure_ascii=False)
+        return json.dumps(
+            {"message": message}, ensure_ascii=False, separators=(",", ":")
+        )
 
     @llm_tool("jwgl_submit_sms_code")
     async def tool_submit_sms_code(self, _context, code: str) -> str:
-        """把用户回复的学校短信验证码提交给统一认证平台，完成教务系统登录。
-        仅当 jwgl_get_status 中 login_pending 为 true（已发起登录、等待验证码）时调用；
-        login_stage 为 "portal" 表示在等教务门户的验证码，为 "mportal" 表示门户已通过、
-        在等 mportal 结构化课表的第二次验证码，两者都用本工具提交。
-        返回 success 为 false 且提示页面已失效时，应调用 jwgl_request_login 重新发起登录。
+        """Submit the user's school SMS code while login_pending=true, for portal or
+        mportal. If expired, restart with jwgl_request_login.
 
         Args:
-            code(string): 用户手机短信收到的 6 位数字验证码
+            code(string): Six-digit code received by the user from school SMS.
+
+        Returns:
+            JSON with the query or operation result.
         """
         result = await self.consent_service.submit_sms_code(code)
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @llm_tool("jwgl_poll_now")
     async def tool_poll_now(self, _context) -> str:
-        """Refresh academic snapshots online when the user explicitly requests it.
-
-        This scans courses, scores, exams and whole-term timetables and may take
-        time. For ordinary queries use the cache-first jwgl_get_* tools directly.
-        New data is pushed to the bound user after the scan.
+        """Refresh academic records and term timetables online only on user request;
+        may be slow. Queries use jwgl_get_* caches. New data is pushed to the bound
+        user.
 
         Returns:
-            JSON with the poll outcome.
+            JSON with the query or operation result.
         """
         result = await self.poll_service.poll_now(trigger="llm-tool")
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))

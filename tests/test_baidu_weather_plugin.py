@@ -1,6 +1,10 @@
+from copy import deepcopy
 from datetime import date, timedelta
+import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,6 +16,7 @@ if str(PLUGIN_PARENT) not in sys.path:
 from astrbot_plugin_baidu_weather.formatters.weather_formatter import (
     format_weather_report,
 )
+from astrbot_plugin_baidu_weather.main import BaiduWeatherPlugin
 from astrbot_plugin_baidu_weather.providers.baidu_weather_provider import (
     BaiduWeatherProvider,
 )
@@ -113,7 +118,8 @@ def test_settings_repo_round_trip(tmp_path):
     assert repo.get_setting("target_umo") == ""
 
 
-def test_state_service_effective_location_window(tmp_path):
+def test_state_service_effective_location_window(tmp_path, monkeypatch):
+    _patch_today(monkeypatch)
     state = _make_state(tmp_path)
     state.set_resident_location(PLACE_WUDAOKE)
     state.set_trip(PLACE_HANGZHOU, date(2026, 7, 26), date(2026, 7, 30))
@@ -132,7 +138,8 @@ def test_state_service_expired_trip_dropped(tmp_path):
     assert state.effective_location(date(2020, 1, 1)) is None
 
 
-def test_state_service_push_time_override(tmp_path):
+def test_state_service_push_time_override(tmp_path, monkeypatch):
+    _patch_today(monkeypatch)
     state = _make_state(tmp_path)
     assert state.get_resident_push_time() == "07:50"
     state.set_resident_push_time("08:00")
@@ -280,6 +287,64 @@ async def test_weather_service_splices_trip_boundary(tmp_path, monkeypatch):
     assert provider.fetch_calls == ["五道口", "杭州"]
     assert result["data"]["now"]["temp"] == 30
     assert result["data"]["hours"][0]["temp"] == 32
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hourly", [None, False, True])
+async def test_weather_tool_only_includes_hourly_details_on_request(
+    tmp_path, monkeypatch, hourly
+):
+    _patch_today(monkeypatch)
+    state = _make_state(tmp_path)
+    state.set_resident_location(PLACE_WUDAOKE)
+    service = WeatherService(load_plugin_config(None), _StubProvider(), state)
+    full_result = await service.query_weather("", 1)
+    full_result["data"]["alerts"] = [{"title": "test weather alert"}]
+    original = deepcopy(full_result)
+    plugin = object.__new__(BaiduWeatherPlugin)
+    plugin.config = load_plugin_config(None)
+    plugin.weather_service = SimpleNamespace(
+        query_weather=AsyncMock(return_value=full_result)
+    )
+    event = SimpleNamespace(
+        get_sender_id=lambda: "test-user",
+        get_group_id=lambda: "",
+        is_private_chat=lambda: True,
+    )
+    kwargs = {} if hourly is None else {"hourly": hourly}
+
+    payload = json.loads(await plugin.tool_get_weather(event, **kwargs))
+
+    assert payload["success"] is True
+    for key in ("start_date", "days", "now", "alerts"):
+        assert payload["data"][key] == full_result["data"][key]
+    if hourly:
+        assert payload["data"]["hours"] == full_result["data"]["hours"]
+    else:
+        assert "hours" not in payload["data"]
+    assert full_result == original
+    plugin.weather_service.query_weather.assert_awaited_once_with("", 1)
+
+
+@pytest.mark.asyncio
+async def test_weather_tool_preserves_source_failure():
+    plugin = object.__new__(BaiduWeatherPlugin)
+    plugin.config = load_plugin_config(None)
+    failure = make_result(
+        False, message="AK missing", error_code="BAIDU_AK_NOT_CONFIGURED"
+    )
+    plugin.weather_service = SimpleNamespace(
+        query_weather=AsyncMock(return_value=failure)
+    )
+    event = SimpleNamespace(
+        get_sender_id=lambda: "test-user",
+        get_group_id=lambda: "",
+        is_private_chat=lambda: True,
+    )
+
+    payload = json.loads(await plugin.tool_get_weather(event))
+
+    assert payload == failure
 
 
 @pytest.mark.asyncio

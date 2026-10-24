@@ -67,12 +67,13 @@ Vendored 上游代码保留 MIT 许可证，位于 `providers/vendor/`。
 
 ## LLM tools
 
-- `get_chaoxing_tasks`：按状态和类型查询作业、视频章节和讨论。
-- `get_chaoxing_homeworks`：查询待办、已完成或全部作业。
-- `get_chaoxing_video_chapters`：查询待办、已完成或全部视频章节。
-- `get_chaoxing_discussions`：查询待办、已完成或全部讨论。
+- `get_chaoxing_tasks`：统一按类型（`作业`、`视频`、`限时章节`、`讨论`，留空查全部）、状态（`待办`、`已完成`、`全部`）和关键词查询。
 - `get_chaoxing_deadlines`：查询指定天数内的明确截止任务。
 - `sync_chaoxing_tasks`：立即从云端同步全部支持的项目，并重建提醒计划。
 - `set_chaoxing_task_tracking`：按 `task_key` 或唯一关键词取消/恢复某个项目的提醒；歧义匹配只返回候选项，不会批量修改。
+
+原来三个分类查询工具已合并到 `get_chaoxing_tasks`，分类查询能力保留。若人格配置曾单独选择旧分类工具，请改为选择统一查询工具。
+
+LLM 查询结果保留任务标识、课程、类型、标题、状态、截止时间以及非空的开始时间、链接和备注；不返回内部课程/班级 ID 和每行重复的来源字段。缓存新鲜度统一放在 `cache` 中，刷新失败保留错误码和原因。命令、同步存储和提醒计划继续使用完整服务数据。
 
 全局 `get_plugin_status` 由独立的 `astrbot_plugin_capability_registry` 提供，本插件只通过公开协议声明自己的能力和状态。

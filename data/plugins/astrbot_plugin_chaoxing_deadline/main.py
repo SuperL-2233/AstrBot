@@ -8,7 +8,11 @@ from astrbot.api import llm_tool, logger, star
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .formatters.task_formatter import format_status, format_tasks
+from .formatters.task_formatter import (
+    format_status,
+    format_task_tool_result,
+    format_tasks,
+)
 from .providers.chaoxing_provider import ChaoxingProvider
 from .repositories.task_repository import TaskRepository
 from .services.reminder_service import ReminderService
@@ -139,9 +143,6 @@ class ChaoxingDeadlinePlugin(star.Star):
             ],
             "llm_tools": [
                 "get_chaoxing_tasks",
-                "get_chaoxing_homeworks",
-                "get_chaoxing_video_chapters",
-                "get_chaoxing_discussions",
                 "get_chaoxing_deadlines",
                 "sync_chaoxing_tasks",
                 "set_chaoxing_task_tracking",
@@ -279,86 +280,43 @@ class ChaoxingDeadlinePlugin(star.Star):
         task_status: str = "待办",
         keyword: str = "",
     ) -> str:
-        """查询学习通作业、视频章节和讨论，可包含已完成记录。
+        """Query 学习通 tasks by type, completion state and keyword.
 
         Args:
-            task_type(string): 可选，作业、视频或讨论；留空查询全部
-            task_status(string): 待办、已完成或全部，默认待办
-            keyword(string): 可选，课程名或任务名关键词
+            task_type(string): 作业/视频/限时章节/讨论; blank queries all.
+            task_status(string): 待办 (default), 已完成 or 全部.
+            keyword(string): Optional course/title keyword.
+
+        Returns:
+            JSON with the query or operation result.
         """
-        return json.dumps(
+        return format_task_tool_result(
             await self.task_service.query_tasks(
                 task_type.strip(), keyword.strip(), task_status.strip()
-            ),
-            ensure_ascii=False,
+            )
         )
-
-    async def _category_tasks(
-        self, task_type: str, task_status: str, keyword: str
-    ) -> str:
-        return json.dumps(
-            await self.task_service.query_tasks(
-                task_type, keyword.strip(), task_status.strip()
-            ),
-            ensure_ascii=False,
-        )
-
-    @llm_tool("get_chaoxing_homeworks")
-    async def tool_get_chaoxing_homeworks(
-        self, _context, task_status: str = "待办", keyword: str = ""
-    ) -> str:
-        """查询学习通作业，包括待办、已完成或全部记录。
-
-        Args:
-            task_status(string): 待办、已完成或全部，默认待办
-            keyword(string): 可选，课程名或作业名关键词
-        """
-        return await self._category_tasks("作业", task_status, keyword)
-
-    @llm_tool("get_chaoxing_video_chapters")
-    async def tool_get_chaoxing_video_chapters(
-        self, _context, task_status: str = "待办", keyword: str = ""
-    ) -> str:
-        """查询学习通视频章节，包括待办、已完成或全部记录。
-
-        Args:
-            task_status(string): 待办、已完成或全部，默认待办
-            keyword(string): 可选，课程名或章节名关键词
-        """
-        return await self._category_tasks("视频", task_status, keyword)
-
-    @llm_tool("get_chaoxing_discussions")
-    async def tool_get_chaoxing_discussions(
-        self, _context, task_status: str = "待办", keyword: str = ""
-    ) -> str:
-        """查询学习通讨论，包括待办、已完成或全部记录。
-
-        Args:
-            task_status(string): 待办、已完成或全部，默认待办
-            keyword(string): 可选，课程名或讨论标题关键词
-        """
-        return await self._category_tasks("讨论", task_status, keyword)
 
     @llm_tool("get_chaoxing_deadlines")
     async def tool_get_chaoxing_deadlines(self, _context, within_days: int = 7) -> str:
-        """查询未来一段时间内有明确截止时间的学习通任务。
+        """Get pending 学习通 tasks with explicit deadlines in the next specified days.
 
         Args:
-            within_days(number): 查询未来天数，范围 0 到 365
+            within_days(number): Days ahead, 0-365; default 7.
+
+        Returns:
+            JSON with the query or operation result.
         """
-        return json.dumps(
-            await self.task_service.query_deadlines(within_days), ensure_ascii=False
+        return format_task_tool_result(
+            await self.task_service.query_deadlines(within_days)
         )
 
     @llm_tool("sync_chaoxing_tasks")
     async def tool_sync_chaoxing_tasks(self, _context) -> str:
-        """登录学习通并同步作业、视频章节、讨论和截止提醒计划。
+        """Log in to 学习通; sync tasks/reminders in background. Return after login and
+        push completion here. Do not repeat before completion.
 
-        只等待登录结果：登录成功立即返回，任务数据在后台继续同步，完成后
-        主动向当前会话推送完成消息；登录失败立即返回原因。同步耗时数分钟，
-        不要在收到完成推送前重复调用。
-
-        Args:
+        Returns:
+            JSON with the query or operation result.
         """
         umo = str(getattr(_context, "unified_msg_origin", "") or "")
 
@@ -373,7 +331,7 @@ class ChaoxingDeadlinePlugin(star.Star):
                 logger.warning(f"超星后台同步结果推送失败: {exc}")
 
         result = await self.task_service.refresh_detached(on_finished=push_result)
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @llm_tool("set_chaoxing_task_tracking")
     async def tool_set_chaoxing_task_tracking(
@@ -384,23 +342,23 @@ class ChaoxingDeadlinePlugin(star.Star):
         keyword: str = "",
         reason: str = "",
     ) -> str:
-        """取消或恢复某个学习通项目的截止提醒跟踪。
-
-        适用于作业、视频章节、限时章节和讨论。优先使用查询结果中的 task_key；
-        关键词匹配多个任务时，本工具会返回候选项，不会批量误操作。
+        """Cancel or restore 学习通 deadline reminders. Prefer task_key; ambiguous
+        keywords return candidates without changes.
 
         Args:
-            tracked(boolean): false 取消后续提醒，true 恢复提醒
-            task_key(string): 可选，查询工具返回的精确任务标识
-            keyword(string): 可选，课程名或任务名关键词
-            reason(string): 可选，取消跟踪原因，例如“选做”
+            tracked(boolean): false cancels reminders; true restores them.
+            task_key(string): Optional exact key from task queries.
+            keyword(string): Optional course/title keyword.
+            reason(string): Optional cancellation reason.
+
+        Returns:
+            JSON with the query or operation result.
         """
-        return json.dumps(
+        return format_task_tool_result(
             self.reminder_service.set_tracking(
                 tracked=tracked,
                 task_key=task_key,
                 keyword=keyword,
                 reason=reason,
-            ),
-            ensure_ascii=False,
+            )
         )

@@ -1,4 +1,6 @@
 import asyncio
+from copy import deepcopy
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -798,30 +800,108 @@ def test_expired_label_is_not_treated_as_completed():
 
 
 @pytest.mark.asyncio
-async def test_category_tools_query_completed_records():
-    class TaskStatus:
-        @staticmethod
-        async def query_tasks(task_type: str, keyword: str, task_status: str) -> dict:
-            return {
-                "success": True,
-                "data": {
-                    "type": task_type,
-                    "status": task_status,
-                    "keyword": keyword,
-                },
-            }
-
+@pytest.mark.parametrize("task_type", ["作业", "视频", "讨论"])
+@pytest.mark.parametrize("task_status", ["待办", "已完成", "全部"])
+async def test_unified_task_tool_queries_categories_and_completion_states(
+    tmp_path, task_type, task_status
+):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    records = [
+        task("", category, status)
+        for category in ("作业", "视频", "讨论")
+        for status in ("pending", "completed")
+    ]
+    repository.replace_tasks(records)
     plugin = object.__new__(ChaoxingDeadlinePlugin)
-    plugin.task_service = TaskStatus()
-    payload = __import__("json").loads(
-        await plugin.tool_get_chaoxing_homeworks(None, "已完成", "线性代数")
+    plugin.task_service = TaskService(
+        {"enabled": False}, ChaoxingProvider({}, repository), repository
     )
 
-    assert payload["data"] == {
-        "type": "作业",
-        "status": "已完成",
-        "keyword": "线性代数",
+    payload = json.loads(
+        await plugin.tool_get_chaoxing_tasks(
+            None, task_type, task_status, keyword="测试"
+        )
+    )
+
+    assert payload["success"] is True
+    assert {row["task_type"] for row in payload["data"]} == {task_type}
+    assert {row["status"] for row in payload["data"]} == {
+        "待办": {"pending"},
+        "已完成": {"completed"},
+        "全部": {"pending", "completed"},
+    }[task_status]
+    assert all(row["deadline"] == "" and row["task_key"] for row in payload["data"])
+    assert all(
+        "course_id" not in row and "class_id" not in row for row in payload["data"]
+    )
+    assert payload["cache"]["stale"] is True
+    assert payload["cache"]["refresh_error"]["error_code"] == "CHAOXING_DISABLED"
+    assert "自动刷新未成功" in payload["message"]
+    assert len(repository.query_tasks(task_status="")) == len(records)
+
+
+@pytest.mark.asyncio
+async def test_deadline_tool_preserves_action_fields_without_mutating_service_result():
+    result = {
+        "success": True,
+        "data": [{**task("2030-01-01 12:00:00"), "note": "course-level deadline"}],
+        "message": "cached tasks",
+        "cache_refresh": {
+            "attempted": False,
+            "refreshed": False,
+            "cache": {"stale": False, "last_sync_time": "2026-10-24 12:00:00"},
+            "refresh_result": None,
+        },
     }
+    original = deepcopy(result)
+    plugin = object.__new__(ChaoxingDeadlinePlugin)
+    plugin.task_service = SimpleNamespace(
+        query_deadlines=AsyncMock(return_value=result)
+    )
+
+    payload = json.loads(await plugin.tool_get_chaoxing_deadlines(None, 7))
+
+    row = payload["data"][0]
+    for key in (
+        "task_key",
+        "course_name",
+        "task_type",
+        "title",
+        "status",
+        "deadline",
+        "url",
+        "note",
+    ):
+        assert row[key] == result["data"][0][key]
+    assert "source_update_time" not in row
+    assert payload["cache"]["last_sync_time"] == "2026-10-24 12:00:00"
+    assert result == original
+
+
+@pytest.mark.asyncio
+async def test_tracking_tool_can_select_a_compact_ambiguity_candidate(tmp_path):
+    repository = TaskRepository(tmp_path / "tasks.sqlite")
+    repository.replace_tasks(
+        [task("2030-01-01 12:00:00", suffix=suffix) for suffix in ("a", "b")]
+    )
+    plugin = object.__new__(ChaoxingDeadlinePlugin)
+    plugin.reminder_service = ReminderService({"reminder_enabled": True}, repository)
+
+    ambiguous = json.loads(
+        await plugin.tool_set_chaoxing_task_tracking(None, False, keyword="测试")
+    )
+
+    assert ambiguous["error_code"] == "AMBIGUOUS_TASK_SELECTOR"
+    assert len(ambiguous["data"]) == 2
+    assert all(row["tracked"] == 1 for row in ambiguous["data"])
+    selected = json.loads(
+        await plugin.tool_set_chaoxing_task_tracking(
+            None, False, task_key=ambiguous["data"][0]["task_key"]
+        )
+    )
+    assert selected["success"] is True
+    assert selected["data"]["tracked"] is False
+    assert selected["data"]["task_key"] == ambiguous["data"][0]["task_key"]
 
 
 @pytest.mark.asyncio

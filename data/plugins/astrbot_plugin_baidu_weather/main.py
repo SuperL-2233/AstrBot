@@ -198,71 +198,87 @@ class BaiduWeatherPlugin(star.Star):
 
     @llm_tool("get_weather")
     async def tool_get_weather(
-        self, _context, location: str = "", days: int = 1
+        self, _context, location: str = "", days: int = 1, hourly: bool = False
     ) -> str:
-        """查询天气，可查询当天或未来多天的天气预报（最多7天）。
-        用户没有指定地点时 location 留空，将使用用户已保存的位置（行程优先）；
-        用户明确指定地点时把地点名称填入 location。
-        返回结果中的 hours 字段包含未来24小时逐小时预报（时刻、天气现象、温度、
-        风向风力、湿度、小时降水量）；用户问逐小时天气、几点下雨、今天何时最热
-        等问题时，用 hours 中的数据回答。
+        """Get 1-7 day weather; blank location uses saved place (trip first). Use
+        hourly=true for hourly forecasts and rain or peak-temperature timing.
 
         Args:
-            location(string): 可选，地点名称；留空使用已保存的位置
-            days(number): 可选，查询天数，1-7，默认1（当天）
+            location(string): Place name; blank uses the saved location.
+            days(number): Forecast days, 1-7; default 1.
+            hourly(boolean): Include 24-hour detail; default false.
+
+        Returns:
+            JSON with the query or operation result.
         """
         access_error = ensure_general_access(_context, self.config)
         if access_error:
             return json.dumps(
-                {"success": False, "message": access_error}, ensure_ascii=False
+                {"success": False, "message": access_error},
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
         result = await self.weather_service.query_weather(location, days)
-        return json.dumps(result, ensure_ascii=False)
+        if result["success"] and not hourly:
+            result = {
+                **result,
+                "data": {
+                    key: value
+                    for key, value in result["data"].items()
+                    if key != "hours"
+                },
+            }
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @llm_tool("set_user_location")
     async def tool_set_user_location(
         self, _context, location: str, start_date: str = "", end_date: str = ""
     ) -> str:
-        """设置用户所在位置，用于天气查询和每日天气推送。
-        用户说"我现在在某地"时，start_date 和 end_date 都留空（设为常驻位置）。
-        用户说"我未来几天都会在某个地方"或"X号到Y号在某地"时，由你根据当前日期
-        推算出起止日期，以 YYYY-MM-DD 格式填入 start_date 和 end_date
-        （设为行程，行程期间覆盖常驻位置，结束后自动回退）。
+        """Set weather location: no dates for resident, both dates for a trip, then
+        restore. Resolve relative dates from today.
 
         Args:
-            location(string): 地点名称，如"五道口"或"杭州市西湖区"
-            start_date(string): 行程开始日期，格式YYYY-MM-DD，可选
-            end_date(string): 行程结束日期，格式YYYY-MM-DD，可选
+            location(string): Place name.
+            start_date(string): Trip start, YYYY-MM-DD; optional.
+            end_date(string): Trip end, YYYY-MM-DD; optional.
+
+        Returns:
+            JSON with the query or operation result.
         """
         access_error = ensure_general_access(_context, self.config)
         if access_error:
             return json.dumps(
-                {"success": False, "message": access_error}, ensure_ascii=False
+                {"success": False, "message": access_error},
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
         result = await self.weather_service.set_location(location, start_date, end_date)
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @llm_tool("set_weather_push_time")
     async def tool_set_weather_push_time(
         self, _context, time: str, start_date: str = "", end_date: str = ""
     ) -> str:
-        """设置每日天气推送的时间。
-        用户说"以后每天X点推天气"时，start_date 和 end_date 留空（设为常驻推送时间）。
-        用户说"接下来几天X点推"或"X号到Y号X点推"时，由你根据当前日期推算起止日期，
-        以 YYYY-MM-DD 格式填入（设为限期推送时间，到期自动回退到常驻时间）。
+        """Set daily weather push time: no dates for permanent, both for temporary,
+        then restore. Resolve relative dates from today.
 
         Args:
-            time(string): 推送时间，格式HH:MM，如07:50
-            start_date(string): 生效开始日期，格式YYYY-MM-DD，可选
-            end_date(string): 生效结束日期，格式YYYY-MM-DD，可选
+            time(string): Daily push time, HH:MM.
+            start_date(string): Start, YYYY-MM-DD; optional.
+            end_date(string): End, YYYY-MM-DD; optional.
+
+        Returns:
+            JSON with the query or operation result.
         """
         access_error = ensure_general_access(_context, self.config)
         if access_error:
             return json.dumps(
-                {"success": False, "message": access_error}, ensure_ascii=False
+                {"success": False, "message": access_error},
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
         result = self.weather_service.set_push_time(time, start_date, end_date)
         if result["success"]:
             with suppress(Exception):
                 await self._refresh_push_job()
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))

@@ -85,21 +85,27 @@ class ChelaileBusPlugin(star.Star):
     async def tool_query_bus_arrival(
         self, _context, line: str = "", station: str = "", city_id: str = ""
     ) -> str:
-        """查询指定公交线路在某一站点的实时到站信息，包括距站距离、剩余站数、预计行驶时长和预计到站时间。站点名称支持模糊匹配：匹配到唯一候选时自动使用，匹配到多个候选时返回候选列表。
+        """Get bus arrivals at a stop. A unique fuzzy stop match is automatic;
+        ambiguous matches return candidates.
 
         Args:
-            line(string): 公交线路号，必须以字符串形式传入，例如 "368"
-            station(string): 公交站点名称，例如 "苏州桥南"，不要求完全精确
-            city_id(string): 可选，车来了城市 ID，留空时使用插件默认配置
+            line(string): Bus line, e.g. "368".
+            station(string): Stop name; fuzzy matching supported.
+            city_id(string): Optional 车来了 city ID; blank uses config.
+
+        Returns:
+            JSON with the query or operation result.
         """
         if not self.config["llm"].get("enable_tools", True):
             return json.dumps(
                 {"success": False, "message": "公交查询 LLM 工具未启用。"},
                 ensure_ascii=False,
+                separators=(",", ":"),
             )
         return json.dumps(
             await self.bus_service.query_arrivals(line, station, city_id),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("search_bus_station")
@@ -116,10 +122,12 @@ class ChelaileBusPlugin(star.Star):
             return json.dumps(
                 {"success": False, "message": "公交查询 LLM 工具未启用。"},
                 ensure_ascii=False,
+                separators=(",", ":"),
             )
         return json.dumps(
             await self.bus_service.search_stations(keyword, city_id),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("query_bus_line_schedule")
@@ -136,8 +144,10 @@ class ChelaileBusPlugin(star.Star):
             return json.dumps(
                 {"success": False, "message": "公交查询 LLM 工具未启用。"},
                 ensure_ascii=False,
+                separators=(",", ":"),
             )
         return json.dumps(
             await self.bus_service.get_line_schedule(line, city_id),
             ensure_ascii=False,
+            separators=(",", ":"),
         )

@@ -243,6 +243,7 @@ class CugbNewsNoticePlugin(star.Star):
         return json.dumps(
             await self.notice_service.refresh(source, earliest_date),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("search_cugb_notice_contents")
@@ -271,6 +272,7 @@ class CugbNewsNoticePlugin(star.Star):
                 keyword.strip(), source, start_date, end_date, limit, offset
             ),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("list_cugb_notices")
@@ -297,6 +299,7 @@ class CugbNewsNoticePlugin(star.Star):
                 source, start_date, end_date, limit, offset
             ),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     @llm_tool("get_cugb_notice_stats")
@@ -307,17 +310,20 @@ class CugbNewsNoticePlugin(star.Star):
         start_date: str = "",
         end_date: str = "",
     ) -> str:
-        """统计本地新闻公告总数、正文数、日期范围、分来源数量和逐月数量。
-
-        当用户询问“一共有多少条”“覆盖到什么时候”等总量问题时，必须调用本工具，
-        不要使用正文关键词搜索结果的返回条数推断总数。
+        """Get exact notice totals, body coverage, date range, per-source and monthly
+        counts. Use for totals; never infer totals from one search page.
 
         Args:
-            source(string): 可选来源过滤：jwc_student、jwc_teaching、ai_news、ai_notice、xgb_news、xgb_notice；留空统计全部来源
+            source(string): jwc_student/jwc_teaching/ai_news/ai_notice/xgb_news/xgb_notice;
+                blank queries all sources.
             start_date(string): 可选统计日期下限，格式 YYYY-MM-DD
             end_date(string): 可选统计日期上限，格式 YYYY-MM-DD
+
+        Returns:
+            JSON with the query or operation result.
         """
         return json.dumps(
             self.notice_service.statistics(source, start_date, end_date),
             ensure_ascii=False,
+            separators=(",", ":"),
         )
