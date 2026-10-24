@@ -77,3 +77,49 @@ def format_batches(result: dict) -> str:
             f"{batch['id']}\n{states.get(batch['state'], batch['state'])} · {format_size(batch['quota_bytes'])} · 截止 {clock}"
         )
     return "\n\n".join(lines)
+
+
+def format_files(result: dict) -> str:
+    """Render a compact file page with exact deletion identifiers.
+
+    Args:
+        result: Private file listing with exact counts and bounded pagination.
+
+    Returns:
+        A QQ-friendly listing of files, received sizes, states, and deadlines.
+    """
+    if not result["total_count"]:
+        return "当前没有快传文件。"
+    page = result["page"]
+    pages = result["total_pages"]
+    if not result["files"]:
+        return f"第 {page} 页没有文件，共 {pages} 页。使用 /快传文件 1 返回首页。"
+    states = {
+        "pending": "待上传",
+        "partial": "部分上传",
+        "uploading": "上传中",
+        "uploaded": "待提交",
+        "ready": "可下载",
+        "expired": "已到期",
+        "deleting": "待清理",
+    }
+    lines = [
+        f"快传文件 第 {page}/{pages} 页，共 {result['total_count']} 个\n声明总量 {format_size(result['total_bytes'])}，已接收 {format_size(result['uploaded_bytes'])}"
+    ]
+    for number, file in enumerate(
+        result["files"], start=(page - 1) * result["page_size"] + 1
+    ):
+        name = file["name"][:40] + ("…" if len(file["name"]) > 40 else "")
+        clock = (
+            datetime.fromtimestamp(file["deadline"])
+            .astimezone()
+            .strftime("%m-%d %H:%M:%S")
+        )
+        state = states.get(file["status"], file["status"])
+        lines.append(
+            f"{number}. {name}\n文件ID：{file['id']}\n批次：{file['batch_id']}\n{state} · 已收 {format_size(file['offset'])}/{format_size(file['size'])}\n截止：{clock}"
+        )
+    if page < pages:
+        lines.append(f"下一页：/快传文件 {page + 1}")
+    lines.append("删除：/快传删除 <文件ID>")
+    return "\n\n".join(lines)

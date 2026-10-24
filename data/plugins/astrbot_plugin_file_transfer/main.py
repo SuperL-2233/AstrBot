@@ -6,12 +6,12 @@ from astrbot.api import llm_tool, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .formatters.transfer_formatter import format_batches, format_grant
+from .formatters.transfer_formatter import format_batches, format_files, format_grant
 from .providers.transfer_provider import TransferProvider, TransferProviderError
 
 
 @star.register(
-    "astrbot_plugin_file_transfer", "macroladlezilla", "私人文件快传", "0.1.0"
+    "astrbot_plugin_file_transfer", "macroladlezilla", "私人文件快传", "0.2.0"
 )
 class FileTransferPlugin(star.Star):
     """Owner-only QQ administration for an independent transfer service."""
@@ -60,11 +60,13 @@ class FileTransferPlugin(star.Star):
         """
         return {
             "summary": "所有者私聊管理独立文件快传授权。",
-            "features": ["上传授权签发", "批次查询与撤销"],
+            "features": ["上传授权签发", "批次查询与撤销", "存储文件查询与删除"],
             "commands": [
                 "/快传帮助",
                 "/快传授权",
                 "/快传列表",
+                "/快传文件",
+                "/快传删除",
                 "/快传撤销",
                 "/快传状态",
             ],
@@ -102,7 +104,7 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(error)
             return
         yield event.plain_result(
-            "私人文件快传\n/快传授权 [总量] [保留分钟]\n例如：/快传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的快传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/快传列表\n/快传撤销 <完整批次ID>\n/快传状态"
+            "私人文件快传\n/快传授权 [总量] [保留分钟]\n例如：/快传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的快传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/快传列表（批次）\n/快传文件 [页码]（每页 10 个）\n/快传删除 <完整文件ID>（仅删除该文件）\n/快传撤销 <完整批次ID>（清理整批）\n/快传状态"
         )
 
     @filter.command("快传授权")
@@ -212,6 +214,74 @@ class FileTransferPlugin(star.Star):
         try:
             yield event.plain_result(
                 format_batches(await self.provider.request("GET", "/admin/batches"))
+            )
+        except TransferProviderError as exc:
+            yield event.plain_result(str(exc))
+
+    @filter.command("快传文件")
+    async def files_command(self, event: AstrMessageEvent, args: GreedyStr):
+        """List one page of stored files across all managed batches.
+
+        Args:
+            event: Owner-private command event.
+            args: Optional one-based page number.
+
+        Yields:
+            File identities, states, deadlines, or a bounded error response.
+        """
+        error = self._access_error(event)
+        if error:
+            yield event.plain_result(error)
+            return
+        page_text = str(args).strip() or "1"
+        if (
+            not re.fullmatch(r"[0-9]{1,10}", page_text)
+            or not 1 <= int(page_text) <= 2**31 - 1
+        ):
+            yield event.plain_result("用法：/快传文件 [正整数页码]，默认第 1 页。")
+            return
+        try:
+            result = await self.provider.request(
+                "GET", f"/admin/files?page={int(page_text)}"
+            )
+            yield event.plain_result(format_files(result))
+        except TransferProviderError as exc:
+            yield event.plain_result(str(exc))
+
+    @filter.command("快传删除")
+    async def delete_command(self, event: AstrMessageEvent, args: GreedyStr):
+        """Delete exactly one file selected by its complete internal identifier.
+
+        Args:
+            event: Owner-private command event.
+            args: Full file identifier from the file listing.
+
+        Yields:
+            Confirmed deletion details or a validation/service error.
+        """
+        error = self._access_error(event)
+        if error:
+            yield event.plain_result(error)
+            return
+        file_id = str(args).strip()
+        if not re.fullmatch(r"[a-f0-9]{32}", file_id):
+            yield event.plain_result("用法：/快传删除 <快传文件中的完整文件ID>")
+            return
+        try:
+            result = await self.provider.request(
+                "DELETE", f"/admin/files/{file_id}", {}
+            )
+            file = result.get("file")
+            if (
+                result.get("ok") is not True
+                or not isinstance(file, dict)
+                or file.get("id") != file_id
+            ):
+                raise TransferProviderError(
+                    "快传服务未确认文件删除，请刷新文件列表检查。"
+                )
+            yield event.plain_result(
+                f"已删除文件：{file.get('name', file_id)}\n文件 ID：{file_id}"
             )
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))

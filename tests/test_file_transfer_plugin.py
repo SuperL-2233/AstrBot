@@ -13,6 +13,7 @@ if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
 from astrbot_plugin_file_transfer.main import FileTransferPlugin
+from astrbot_plugin_file_transfer.formatters.transfer_formatter import format_files
 from astrbot_plugin_file_transfer.providers.transfer_provider import (
     TransferProvider,
     TransferProviderError,
@@ -313,3 +314,144 @@ async def test_provider_disallows_redirects_and_bounds_response_size():
         finally:
             await provider.close()
     assert not called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler,args", [("files_command", ""), ("delete_command", "a" * 32)]
+)
+@pytest.mark.parametrize(
+    "sender,private,configured,enabled",
+    [
+        ("other", True, True, True),
+        ("owner", False, True, True),
+        ("owner", True, False, True),
+        ("owner", True, True, False),
+    ],
+)
+async def test_file_management_requires_enabled_owner_private_access(
+    plugin, handler, args, sender, private, configured, enabled
+):
+    plugin.config["owner_qq_id"] = "owner" if configured else ""
+    plugin.config["enabled"] = enabled
+    response = [
+        text async for text in getattr(plugin, handler)(Event(sender, private), args)
+    ]
+    assert response
+    plugin.provider.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args,page", [("", 1), ("2", 2), (" 3 ", 3)])
+async def test_file_command_requests_exact_page_and_reports_no_files(
+    plugin, args, page
+):
+    plugin.provider.request.return_value = {
+        "files": [],
+        "page": page,
+        "page_size": 10,
+        "total_count": 0,
+        "total_pages": 0,
+        "total_bytes": 0,
+        "uploaded_bytes": 0,
+    }
+    assert [text async for text in plugin.files_command(Event(), args)] == [
+        "当前没有快传文件。"
+    ]
+    plugin.provider.request.assert_awaited_once_with("GET", f"/admin/files?page={page}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args", ["0", "-1", "1.5", "1 2", "page=2", "2147483648", "９", "9" * 20]
+)
+async def test_invalid_file_page_never_calls_service(plugin, args):
+    response = [text async for text in plugin.files_command(Event(), args)]
+    assert "用法" in response[0]
+    plugin.provider.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_command_reports_confirmed_file_identity(plugin):
+    plugin.provider.request.return_value = {
+        "ok": True,
+        "file": {"id": "a" * 32, "batch_id": "b" * 32, "name": "example.txt"},
+    }
+    response = [text async for text in plugin.delete_command(Event(), "a" * 32)]
+    assert "已删除文件：example.txt" in response[0]
+    assert "a" * 32 in response[0]
+    plugin.provider.request.assert_awaited_once_with(
+        "DELETE", "/admin/files/" + "a" * 32, {}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args",
+    ["", "example.txt", "../metadata.sqlite", "a" * 16, "a" * 32 + " other", "A" * 32],
+)
+async def test_delete_command_requires_full_file_id(plugin, args):
+    response = [text async for text in plugin.delete_command(Event(), args)]
+    assert "完整文件ID" in response[0]
+    plugin.provider.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler,args", [("files_command", ""), ("delete_command", "a" * 32)]
+)
+async def test_file_management_reports_real_errors_without_retry(plugin, handler, args):
+    plugin.provider.request.side_effect = TransferProviderError(
+        "文件不存在或已被清理。"
+    )
+    assert [text async for text in getattr(plugin, handler)(Event(), args)] == [
+        "文件不存在或已被清理。"
+    ]
+    assert plugin.provider.request.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"ok": False},
+        {"ok": True},
+        {"ok": True, "file": {"id": "b" * 32}},
+        {"file": {"id": "a" * 32}},
+    ],
+)
+async def test_delete_command_does_not_claim_unconfirmed_success(plugin, response):
+    plugin.provider.request.return_value = response
+    reply = [text async for text in plugin.delete_command(Event(), "a" * 32)]
+    assert "未确认文件删除" in reply[0]
+    assert "已删除文件" not in reply[0]
+
+
+def test_file_formatter_keeps_ids_counts_progress_and_bounded_messages():
+    files = [
+        {
+            "id": f"{number:032x}",
+            "batch_id": "b" * 32,
+            "name": "文件名" * 80,
+            "size": 10_000_000_000,
+            "offset": 5_000_000_000,
+            "status": "partial",
+            "deadline": 2_000_000_000,
+        }
+        for number in range(10)
+    ]
+    result = {
+        "files": files,
+        "page": 1,
+        "page_size": 10,
+        "total_pages": 2,
+        "total_count": 11,
+        "total_bytes": 100_000_000_000,
+        "uploaded_bytes": 50_000_000_000,
+    }
+    reply = format_files(result)
+    assert "共 11 个" in reply and "下一页：/快传文件 2" in reply
+    assert "部分上传" in reply and "5GB/10GB" in reply
+    assert all(file["id"] in reply for file in files)
+    assert len(reply) < 2000
+    assert "没有文件" in format_files({**result, "page": 3, "files": []})
