@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from ..core.jwgl_core import utc_iso
-from ..core.mportal_client import TERM_CODE_TO_LABEL
+from ..core.mportal_client import TERM_CODE_TO_LABEL, period_to_year_term
 from ..core.weekly_schedule import (
     WEEKDAY_LABELS,
     WeeklyTimetable,
@@ -223,6 +223,93 @@ class WeeklyScheduleService:
         """
         stored = self.get_timetable()
         return stored.get("period", ""), stored.get("weeks", {}).get(str(week), [])
+
+    def query_week_courses(
+        self,
+        stored: dict[str, Any],
+        week: str = "",
+        *,
+        today: date,
+        semester_start_date: str = "",
+    ) -> dict[str, Any]:
+        """Resolve a numeric or relative week and return only its cached courses.
+
+        Args:
+            stored: The selected term's persisted weekly timetable.
+            week: Teaching week number, current, next, today, tomorrow, or empty.
+            today: Current date in the plugin's configured timezone.
+            semester_start_date: Optional manual start date for the current term.
+
+        Returns:
+            A compact overview, one week's courses, or one day's courses.
+            Unknown dates and invalid week values return explicit failures.
+        """
+        week = week.strip().lower()
+        result = {
+            "period": stored.get("period", ""),
+            "source": stored.get("source", ""),
+            "generated_at": stored.get("generated_at", ""),
+        }
+        if not week:
+            return {
+                **result,
+                "max_week": stored.get("max_week", 0),
+                "weeks": {
+                    number: len(entries)
+                    for number, entries in stored.get("weeks", {}).items()
+                },
+                "unparsed": stored.get("unparsed", []),
+            }
+        if week in {"current", "next", "today", "tomorrow"}:
+            target = today + timedelta(days={"next": 7, "tomorrow": 1}.get(week, 0))
+            week_dates = stored.get("week_dates", {})
+            week_number = next(
+                (
+                    int(number)
+                    for number, dates in week_dates.items()
+                    if target.isoformat() in dates
+                ),
+                0,
+            )
+            if not week_dates:
+                mapped = period_to_year_term(result["period"])
+                start = self.term_start(*mapped) if mapped else ""
+                manual = (
+                    semester_start_date
+                    if result["period"] == self.repo.get_meta("current_period", "")
+                    else ""
+                )
+                for start_date in (manual, start):
+                    try:
+                        week_number = (
+                            target - date.fromisoformat(start_date)
+                        ).days // 7 + 1
+                        break
+                    except ValueError:
+                        continue
+            if not 1 <= week_number <= stored.get("max_week", 0):
+                return {
+                    **result,
+                    "success": False,
+                    "message": f"本地课表无法确定 {target.isoformat()} 的教学周，请指定周次或更新课表。",
+                }
+        elif week.isdigit() and int(week) > 0:
+            week_number = int(week)
+        else:
+            return {
+                **result,
+                "success": False,
+                "message": "week 请使用正整数周次、current、next、today 或 tomorrow。",
+            }
+        courses = stored.get("weeks", {}).get(str(week_number), [])
+        if week in {"today", "tomorrow"}:
+            courses = [
+                {**item, "date": target.isoformat()}
+                for item in courses
+                if item.get("weekday") == target.isoweekday()
+            ]
+            result["date"] = target.isoformat()
+        return {**result, "week": week_number, "courses": courses}
 
     def save_term_info(self, term_info: dict[str, Any]) -> None:
         """Cache the mportal get-index termInfo payload."""

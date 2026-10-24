@@ -4,7 +4,9 @@ import asyncio
 import json
 import re
 from contextlib import suppress
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from astrbot.api import llm_tool, logger, star
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -22,6 +24,7 @@ from .formatters.jwgl_formatter import (
 from .repositories.snapshot_repo import SnapshotRepository
 from .services.consent_service import ConsentService
 from .services.poll_service import PollService
+from .services.query_service import AcademicQueryService
 from .services.reminder_service import ClassReminderService
 from .services.session_service import JwglSessionService
 from .services.weekly_schedule_service import WeeklyScheduleService
@@ -44,6 +47,9 @@ class CugbJwglPlugin(star.Star):
         self.session_service = JwglSessionService(self.config)
         self._startup_task: asyncio.Task | None = None
         self.weekly_service = WeeklyScheduleService(self.repo)
+        self.query_service = AcademicQueryService(
+            self.session_service, self.repo, self.weekly_service
+        )
         self.poll_service = PollService(
             self.config,
             self.session_service,
@@ -122,7 +128,7 @@ class CugbJwglPlugin(star.Star):
 
     def get_public_capabilities(self) -> dict:
         return {
-            "summary": "每日定时登录 CUGB 教务系统，监控课表、成绩与考试安排变化并向绑定 QQ 私聊推送，支持命令与 LLM 工具实时查询。",
+            "summary": "每日定时登录 CUGB 教务系统，监控课表、成绩与考试安排变化并向绑定 QQ 私聊推送，命令与 LLM 查询优先读取本地缓存，支持主动刷新。",
             "features": [
                 "每天早上按 cron 检查登录态，失效时 QQ 征询后自动发送短信验证码登录",
                 "登录后每 15±2 分钟轮询，兼具 WebVPN 与会话续期",
@@ -130,6 +136,7 @@ class CugbJwglPlugin(star.Star):
                 "课表、成绩、考试快照 diff，新增或变化行 QQ 推送",
                 "每轮轮询扫描 mportal 全周结构化课表（CAS 直连，无需 WebVPN），变动时重建按周课表并与教务文本交叉验证",
                 "按周课表支持指定年份与学期（mportal 数据），未缓存的学期实时拉取并缓存",
+                "课表、成绩、考试查询优先读取本地快照，不等待后台浏览器；支持直接查今天、明天、本周、下周课表",
                 "开学日期自动来自 mportal 学期信息，可手动覆盖",
                 "每节课开始前按配置提前向绑定 QQ 推送上课提醒",
             ],
@@ -199,42 +206,23 @@ class CugbJwglPlugin(star.Star):
     async def _snapshot_or_live(
         self, kind: str, year: str = "", term: str = ""
     ) -> dict:
+        """Query academic records and format course schedules for tools.
+
+        Args:
+            kind: Academic record type.
+            year: Optional year paired with term.
+            term: Optional Chinese term label.
+
+        Returns:
+            The query result with structured course schedule fields.
+        """
         max_terms = int(self.config.get("scores_probe_max_terms", 6))
-        try:
-            result = await self.session_service.query_live(kind, year, term, max_terms)
-            records = result["records"]
-            if kind == "courses":
-                records = [structure_course_record(record) for record in records]
-            return {
-                "records": records,
-                "period": result["period"],
-                "source": "live",
-                **({"note": result["note"]} if result.get("note") else {}),
-            }
-        except (AuthenticationRequired, JwglError) as error:
-            note = (
-                "登录态已失效，返回本地快照"
-                if isinstance(error, AuthenticationRequired)
-                else f"实时查询失败（{error}），返回本地快照"
-            )
-            if kind == "scores":
-                records = self._latest_scores_snapshot()
-                period = self.repo.get_meta("last_scores_period", "")
-            elif kind == "courses":
-                records = [
-                    structure_course_record(record)
-                    for record in self._current_courses_snapshot()
-                ]
-                period = self.repo.get_meta("current_period", "")
-            else:
-                records = self.repo.items(kind)
-                period = ""
-            return {
-                "records": records,
-                "period": period,
-                "source": "snapshot",
-                "note": note,
-            }
+        result = await self.query_service.query(kind, year, term, max_terms)
+        if kind == "courses":
+            result["records"] = [
+                structure_course_record(record) for record in result["records"]
+            ]
+        return result
 
     @staticmethod
     def _parse_period_arg(raw: str) -> tuple[str, str]:
@@ -244,11 +232,23 @@ class CugbJwglPlugin(star.Star):
             return "", ""
         return match.group(1), match.group(2)
 
-    async def _week_courses_payload(self, year: str, term: str) -> dict[str, Any]:
-        """Resolve the weekly timetable payload for a term or an error message."""
+    async def _week_courses_payload(
+        self, year: str, term: str, *, on_date: date | None = None
+    ) -> dict[str, Any]:
+        """Resolve a cached timetable or fetch an explicitly requested missing term.
+
+        Args:
+            year: Optional year paired with term.
+            term: Optional Chinese term label.
+            on_date: Date used to choose a cached term when no term is specified.
+
+        Returns:
+            The timetable payload or an explicit error message.
+        """
         year, term = year.strip(), term.strip()
         if not year and not term:
-            return {"payload": self.weekly_service.get_timetable()}
+            on_date = on_date or datetime.now(ZoneInfo(self.config["timezone"])).date()
+            return {"payload": self.weekly_service.get_timetable(on_date=on_date)}
         if not year or not term:
             return {"error": "year 和 term 必须同时提供（如 year=2026、term=秋）。"}
         try:
@@ -402,14 +402,20 @@ class CugbJwglPlugin(star.Star):
 
     @llm_tool("jwgl_get_scores")
     async def tool_get_scores(self, _context, year: str = "", term: str = "") -> str:
-        """查询个人成绩。必须提供学期：year 填自然年（如 "2025"，与学校系统一致），
-        term 填 春/夏/秋 之一；学期先后顺序为 春<夏<秋（按自然年）。
-        用户说"这个学期/本学期"时，先调用 jwgl_get_status 读取 current_period 作为参数。
-        若所查学期尚无成绩，会自动返回最晚有成绩的学期并在 note 中说明。
+        """Query personal scores, using local snapshots before online requests.
+
+        Omit year and term for the latest cached score period; no status call is
+        needed first. Supply both to query another period. Background polls keep
+        snapshots updated; use jwgl_poll_now only when the user requests a refresh.
+        An uncached period without scores may fall back to the latest scores,
+        with the actual period and a note in the response.
 
         Args:
-            year(string): 自然年学年，如 "2025"
-            term(string): 学期，春、夏或秋
+            year(string): Optional natural year, such as "2026"; pair with term.
+            term(string): Optional Chinese term label: 春, 夏 or 秋.
+
+        Returns:
+            JSON containing records, their period and snapshot/live source.
         """
         return json.dumps(
             await self._snapshot_or_live("scores", year, term), ensure_ascii=False
@@ -417,15 +423,21 @@ class CugbJwglPlugin(star.Star):
 
     @llm_tool("jwgl_get_courses")
     async def tool_get_courses(self, _context, year: str = "", term: str = "") -> str:
-        """查询课表。必须提供学期：year 填自然年（如 "2025"），term 填 春/夏/秋 之一。
-        用户说"这个学期/本学期"时，先调用 jwgl_get_status 读取 current_period 作为参数。
-        返回的记录中 schedule 字段是已解析的结构化上课安排（周次、星期、节次、地点），
-        不再包含原始自由文本；validation 字段是与 mportal 结构化课表的交叉验证结果
-        （consistent 为 true 表示两边一致），mportal 不可用时无此字段。
+        """Query the semester course list from local snapshots first.
+
+        Omit year and term for the current period, including 本学期/这个学期;
+        call this tool directly without a preceding status query. Supply both for
+        another period. For 今天/明天/本周/下周 use jwgl_get_week_courses instead.
+        The schedule fields contain parsed weeks, weekdays, sections and rooms.
+        Validation uses cached mportal data only. Use jwgl_poll_now only when the
+        user explicitly requests fresh data.
 
         Args:
-            year(string): 自然年学年，如 "2025"
-            term(string): 学期，春、夏或秋
+            year(string): Optional natural year, such as "2026"; pair with term.
+            term(string): Optional Chinese term label: 春, 夏 or 秋.
+
+        Returns:
+            JSON records with their actual period, source and cached validation.
         """
         result = await self._snapshot_or_live("courses", year, term)
         mapped = period_to_year_term(result.get("period", ""))
@@ -441,54 +453,50 @@ class CugbJwglPlugin(star.Star):
     async def tool_get_week_courses(
         self, _context, week: str = "", year: str = "", term: str = ""
     ) -> str:
-        """按教学周查询课表，返回该周每天每节的课程安排。
-        默认查询学校当前学期（轮询时自动生成的按周结构化课表）。
-        要查其他学期（如下学期）必须同时提供 year 与 term；指定学期的数据来自
-        mportal 结构化课表，本地未缓存时会实时从 mportal 拉取整个学期并缓存。
-        week 填教学周序号（如 "3" 表示第 3 周）；留空时返回各周节次总览。
-        用户说"这周/本周"时，先结合 current_period 与开学日期推算周次，不确定就向用户确认。
+        """Query a cached weekly timetable including course dates and rooms.
+
+        For 本周/这周 pass week="current"; for 下周 pass week="next".
+        For 今天/明天 pass week="today"/"tomorrow" to return only that day's
+        courses. Dates and teaching weeks are resolved locally without a status
+        or semester-start query.
+        Omit year and term for the current cached period; supply both for another
+        period. Only an uncached explicit period needs a live full-term scan.
 
         Args:
-            week(string): 教学周序号，如 "3"；留空返回周次总览
-            year(string): 自然年学年，如 "2026"；须与 term 一起提供
-            term(string): 学期，春、夏或秋；须与 year 一起提供
+            week(string): "current", "next", "today", "tomorrow", a teaching week
+                number such as "3", or empty for an overview of all weeks.
+            year(string): Optional natural year, such as "2026"; pair with term.
+            term(string): Optional Chinese term label: 春, 夏 or 秋.
+
+        Returns:
+            JSON for one week or a compact overview, with its actual period.
         """
-        result = await self._week_courses_payload(year, term)
+        today = datetime.now(ZoneInfo(self.config["timezone"])).date()
+        target = today + timedelta(
+            days={"next": 7, "tomorrow": 1}.get(week.strip().lower(), 0)
+        )
+        result = await self._week_courses_payload(year, term, on_date=target)
         if "error" in result:
             return json.dumps(
                 {"success": False, "message": result["error"]}, ensure_ascii=False
             )
-        stored = result["payload"]
-        week = week.strip()
-        if not week or not week.isdigit():
-            return json.dumps(
-                {
-                    "period": stored.get("period", ""),
-                    "source": stored.get("source", ""),
-                    "generated_at": stored.get("generated_at", ""),
-                    "max_week": stored.get("max_week", 0),
-                    "weeks": {
-                        number: len(entries)
-                        for number, entries in stored.get("weeks", {}).items()
-                    },
-                    "unparsed": stored.get("unparsed", []),
-                },
-                ensure_ascii=False,
-            )
-        week_number = int(week)
         return json.dumps(
-            {
-                "period": stored.get("period", ""),
-                "source": stored.get("source", ""),
-                "week": week_number,
-                "courses": stored.get("weeks", {}).get(str(week_number), []),
-            },
+            self.weekly_service.query_week_courses(
+                result["payload"],
+                week,
+                today=today,
+                semester_start_date=self.config.get("semester_start_date", ""),
+            ),
             ensure_ascii=False,
         )
 
     @llm_tool("jwgl_get_exams")
     async def tool_get_exams(self, _context) -> str:
-        """实时查询考试安排；登录态失效时返回本地快照并在 note 中说明。"""
+        """Query exam arrangements from local snapshots before online requests.
+
+        Returns:
+            JSON records with a snapshot/live source label.
+        """
         return json.dumps(await self._snapshot_or_live("exams"), ensure_ascii=False)
 
     @llm_tool("jwgl_request_login")
@@ -524,6 +532,14 @@ class CugbJwglPlugin(star.Star):
 
     @llm_tool("jwgl_poll_now")
     async def tool_poll_now(self, _context) -> str:
-        """立即执行一轮教务数据检查（课表、成绩、考试），发现新数据会自动推送给绑定用户。"""
+        """Refresh academic snapshots online when the user explicitly requests it.
+
+        This scans courses, scores, exams and whole-term timetables and may take
+        time. For ordinary queries use the cache-first jwgl_get_* tools directly.
+        New data is pushed to the bound user after the scan.
+
+        Returns:
+            JSON with the poll outcome.
+        """
         result = await self.poll_service.poll_now(trigger="llm-tool")
         return json.dumps(result, ensure_ascii=False)

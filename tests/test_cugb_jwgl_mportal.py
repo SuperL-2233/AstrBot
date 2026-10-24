@@ -1,6 +1,7 @@
 import sys
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -509,17 +510,8 @@ def test_weeks_from_structured_records_round_trip():
     assert occurrence["location"] == "综合楼101"
 
 
-class _FakeSession:
-    def __init__(self, scan: dict):
-        self.scan = scan
-
-    async def fetch_mportal_timetable(self, year: str, term: int) -> dict:
-        assert (year, term) == ("2026", 1)
-        return self.scan
-
-
 @pytest.mark.asyncio
-async def test_validate_query_term_against_live_mportal(tmp_path):
+async def test_validate_query_term_against_cached_mportal(tmp_path):
     repo = SnapshotRepository(tmp_path / "jwgl.sqlite")
     weekly = WeeklyScheduleService(repo)
     scan = {
@@ -527,9 +519,11 @@ async def test_validate_query_term_against_live_mportal(tmp_path):
         "countweek": 17,
         "weeks": {1: parse_week_payload(_week_body(_cell("示例课程")))},
     }
+    weekly.regenerate_mportal("2026 秋", scan["weeks"])
+    session = AsyncMock()
     poll = PollService(
         {"mportal_enabled": True},
-        _FakeSession(scan),
+        session,
         repo,
         lambda _text: None,
         weekly,
@@ -554,4 +548,6 @@ async def test_validate_query_term_against_live_mportal(tmp_path):
     assert report["weeks"]["1"]["only_in_candidate"]
 
     assert await poll.validate_query_term("", "", structured) is None
+    assert await poll.validate_query_term("2027", "春", structured) is None
+    session.fetch_mportal_timetable.assert_not_awaited()
     repo.close()

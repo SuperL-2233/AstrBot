@@ -283,33 +283,33 @@ class PollService:
     async def validate_query_term(
         self, year: str, term: str, structured_records: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
-        """Cross-validate one term's course records against live mportal data.
+        """Cross-validate course records using an already-cached mportal timetable.
 
         Args:
             year: Four-digit year label.
             term: Term character 春/夏/秋.
             structured_records: Course records with parsed "schedule" lists
-                (as returned to the caller; compared against mportal).
+                (as returned to the caller; compared against cached mportal).
 
         Returns:
             A compact report dict, or None when the term is unmappable or
-            mportal is unavailable.
+            mportal data is not cached. Query-time validation never uses the
+            browser or waits for a background scan.
         """
         if not self.config.get("mportal_enabled", True):
             return None
         code = TERM_LABEL_TO_CODE.get(term)
         if not year.isdigit() or code is None:
             return None
-        try:
-            scan = await self.session.fetch_mportal_timetable(year, code)
-        except Exception as error:
-            logger.warning(
-                "按学期查询的 mportal 校验失败：%s", safe_exception_name(error)
-            )
+        period = period_label(year, term)
+        stored = self.weekly.get_timetable(period)
+        if not stored and period == self.repo.get_meta("current_period", ""):
+            stored = self.weekly.get_timetable()
+        if stored.get("source") != "mportal" or stored.get("period") != period:
             return None
-        reference = {week: data["occurrences"] for week, data in scan["weeks"].items()}
+        reference = {int(week): items for week, items in stored["weeks"].items()}
         candidate = weeks_from_structured_records(structured_records)
-        report = self.weekly.compare(reference, candidate, period_label(year, term))
+        report = self.weekly.compare(reference, candidate, period)
         mismatch = report.get("mismatch_weeks", [])
         return {
             "matched": report.get("matched", 0),
@@ -344,6 +344,10 @@ class PollService:
             raise JwglError(f"无法识别的学期：{year or '?'} {term or '?'}")
         period = period_label(year, term)
         stored = self.weekly.get_timetable(period)
+        if not stored and period == self.repo.get_meta("current_period", ""):
+            default = self.weekly.get_timetable()
+            if default.get("period") == period:
+                stored = default
         if stored:
             return stored
         if not self.config.get("mportal_enabled", True):
@@ -422,6 +426,8 @@ class PollService:
             _baseline, course_new, course_changed = self.repo.diff_and_update(
                 "courses", records, _course_key(label)
             )
+            # Distinguish a successfully scanned empty term from a cache miss.
+            self.repo.set_meta(f"snapshot_period:courses:{label}", "1")
             courses_total += len(records)
             if course_new or course_changed:
                 courses_changed = True
