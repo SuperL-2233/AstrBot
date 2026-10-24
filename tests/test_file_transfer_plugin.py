@@ -23,6 +23,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_tool_exec import call_local_llm_tool
 from astrbot.core.provider.register import llm_tools
 from astrbot.core.star.filter.command import CommandFilter, GreedyStr
+from astrbot.core.star.star_handler import star_handlers_registry
 
 
 class Event:
@@ -144,9 +145,9 @@ async def test_disabled_and_unavailable_service_never_issue_fake_keys(plugin):
     assert "尚未启用" in [text async for text in plugin.authorize(Event(), "")][0]
     plugin.provider.request.assert_not_called()
     plugin.config["enabled"] = True
-    plugin.provider.request.side_effect = TransferProviderError("无法连接快传服务")
+    plugin.provider.request.side_effect = TransferProviderError("无法连接暂传服务")
     assert [text async for text in plugin.authorize(Event(), "")] == [
-        "无法连接快传服务"
+        "无法连接暂传服务"
     ]
     assert plugin.get_public_capabilities()["llm_tools"] == [
         "create_file_transfer_grant"
@@ -243,9 +244,9 @@ async def test_invalid_grant_tool_settings_never_contact_service(plugin, setting
 
 @pytest.mark.asyncio
 async def test_grant_tool_reports_service_failure_without_retry_or_fake_key(plugin):
-    plugin.provider.request.side_effect = TransferProviderError("无法连接快传服务")
+    plugin.provider.request.side_effect = TransferProviderError("无法连接暂传服务")
     result = json.loads(await plugin.tool_create_grant(Event()))
-    assert result == {"success": False, "message": "无法连接快传服务"}
+    assert result == {"success": False, "message": "无法连接暂传服务"}
     assert plugin.provider.request.await_count == 1
 
 
@@ -258,11 +259,53 @@ def test_grant_tool_schema_has_settings_but_no_model_supplied_identity():
 
 
 def test_greedy_command_parameters_preserve_defaults_and_reject_extra_text():
-    command = CommandFilter("快传授权")
+    command = CommandFilter("暂传授权")
     assert command.validate_and_convert_params([], {"args": GreedyStr}) == {"args": ""}
     assert command.validate_and_convert_params(["5G", "60"], {"args": GreedyStr}) == {
         "args": "5G 60"
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["暂传", "快传"])
+@pytest.mark.parametrize(
+    "suffix,args,params",
+    [
+        ("帮助", "", {}),
+        ("授权", "5G 60", {"args": "5G 60"}),
+        ("列表", "", {}),
+        ("文件", "2", {"args": "2"}),
+        ("删除", "a" * 32, {"args": "a" * 32}),
+        ("撤销", "b" * 32, {"args": "b" * 32}),
+        ("状态", "", {}),
+    ],
+)
+async def test_renamed_and_legacy_commands_route_once_and_keep_owner_checks(
+    plugin, prefix, suffix, args, params
+):
+    parsed = {}
+    event = SimpleNamespace(
+        is_at_or_wake_command=True,
+        get_message_str=lambda: f"{prefix}{suffix} {args}",
+        set_extra=parsed.__setitem__,
+    )
+    matches = [
+        handler
+        for handler in star_handlers_registry.get_handlers_by_module_name(
+            FileTransferPlugin.__module__
+        )
+        for command in handler.event_filters
+        if isinstance(command, CommandFilter) and command.filter(event, {})
+    ]
+    assert len(matches) == 1
+    assert parsed["parsed_params"] == params
+    assert f"/暂传{suffix}" in plugin.get_public_capabilities()["commands"]
+    response = [
+        text
+        async for text in matches[0].handler(plugin, Event("other"), **params)
+    ]
+    assert "仅允许" in response[0]
+    plugin.provider.request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -356,7 +399,7 @@ async def test_file_command_requests_exact_page_and_reports_no_files(
         "uploaded_bytes": 0,
     }
     assert [text async for text in plugin.files_command(Event(), args)] == [
-        "当前没有快传文件。"
+        "当前没有暂传文件。"
     ]
     plugin.provider.request.assert_awaited_once_with("GET", f"/admin/files?page={page}")
 
@@ -450,7 +493,7 @@ def test_file_formatter_keeps_ids_counts_progress_and_bounded_messages():
         "uploaded_bytes": 50_000_000_000,
     }
     reply = format_files(result)
-    assert "共 11 个" in reply and "下一页：/快传文件 2" in reply
+    assert "共 11 个" in reply and "下一页：/暂传文件 2" in reply
     assert "部分上传" in reply and "5GB/10GB" in reply
     assert all(file["id"] in reply for file in files)
     assert len(reply) < 2000

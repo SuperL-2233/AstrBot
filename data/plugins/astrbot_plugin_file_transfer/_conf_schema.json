@@ -1,7 +1,7 @@
 {
   "enabled": {
     "type": "bool",
-    "description": "启用文件快传管理；需要另外部署独立的文件服务",
+    "description": "启用暂传管理；需要另外部署独立的文件服务",
     "default": false
   },
   "owner_qq_id": {

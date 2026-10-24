@@ -1,5 +1,5 @@
 name: astrbot_plugin_file_transfer
-display_name: 私人文件快传
+display_name: 暂传
 author: macroladlezilla
-description: 仅允许所有者私聊管理快传授权，查询存储文件并按文件 ID 删除。
+description: 仅允许所有者私聊管理暂传授权，查询存储文件并按文件 ID 删除。
 version: 0.2.0

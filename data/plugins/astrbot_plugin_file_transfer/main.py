@@ -10,9 +10,7 @@ from .formatters.transfer_formatter import format_batches, format_files, format_
 from .providers.transfer_provider import TransferProvider, TransferProviderError
 
 
-@star.register(
-    "astrbot_plugin_file_transfer", "macroladlezilla", "私人文件快传", "0.2.0"
-)
+@star.register("astrbot_plugin_file_transfer", "macroladlezilla", "暂传", "0.2.0")
 class FileTransferPlugin(star.Star):
     """Owner-only QQ administration for an independent transfer service."""
 
@@ -45,11 +43,11 @@ class FileTransferPlugin(star.Star):
         """
         owner = str(self.config.get("owner_qq_id", "")).strip()
         if not owner:
-            return "快传管理已关闭，请先配置 owner_qq_id。"
+            return "暂传管理已关闭，请先配置 owner_qq_id。"
         if not event.is_private_chat() or str(event.get_sender_id()) != owner:
-            return "仅允许配置的所有者在私聊中管理文件快传。"
+            return "仅允许配置的所有者在私聊中管理暂传。"
         if not self.config.get("enabled"):
-            return "快传插件尚未启用，请先部署独立文件服务并完成配置。"
+            return "暂传插件尚未启用，请先部署独立文件服务并完成配置。"
         return None
 
     def get_public_capabilities(self) -> dict:
@@ -59,16 +57,16 @@ class FileTransferPlugin(star.Star):
             The capability registry's public plugin contract.
         """
         return {
-            "summary": "所有者私聊管理独立文件快传授权。",
+            "summary": "所有者私聊管理独立暂传授权。",
             "features": ["上传授权签发", "批次查询与撤销", "存储文件查询与删除"],
             "commands": [
-                "/快传帮助",
-                "/快传授权",
-                "/快传列表",
-                "/快传文件",
-                "/快传删除",
-                "/快传撤销",
-                "/快传状态",
+                "/暂传帮助",
+                "/暂传授权",
+                "/暂传列表",
+                "/暂传文件",
+                "/暂传删除",
+                "/暂传撤销",
+                "/暂传状态",
             ],
             "llm_tools": ["create_file_transfer_grant"],
         }
@@ -89,7 +87,7 @@ class FileTransferPlugin(star.Star):
             "last_check_success": self.provider.last_check_success,
         }
 
-    @filter.command("快传帮助")
+    @filter.command("暂传帮助", alias={"快传帮助"})
     async def help_command(self, event: AstrMessageEvent):
         """Show command syntax to the configured owner.
 
@@ -104,10 +102,10 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(error)
             return
         yield event.plain_result(
-            "私人文件快传\n/快传授权 [总量] [保留分钟]\n例如：/快传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的快传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/快传列表（批次）\n/快传文件 [页码]（每页 10 个）\n/快传删除 <完整文件ID>（仅删除该文件）\n/快传撤销 <完整批次ID>（清理整批）\n/快传状态"
+            "暂传\n/暂传授权 [总量] [保留分钟]\n例如：/暂传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的暂传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/暂传列表（批次）\n/暂传文件 [页码]（每页 10 个）\n/暂传删除 <完整文件ID>（仅删除该文件）\n/暂传撤销 <完整批次ID>（清理整批）\n/暂传状态"
         )
 
-    @filter.command("快传授权")
+    @filter.command("暂传授权", alias={"快传授权"})
     async def authorize(self, event: AstrMessageEvent, args: GreedyStr):
         """Issue a grant through the same authorization path used by the tool.
 
@@ -128,7 +126,7 @@ class FileTransferPlugin(star.Star):
         total_size: str = "2G",
         retention_minutes: int = 30,
     ) -> str:
-        """Create one 快传 upload grant per owner request in owner private chat. Each
+        """Create one Zanchuan upload grant per owner request in owner private chat. Each
         call creates a new key; call once. Relay entrance/key exactly. Redemption
         1h, upload window 30m; retention starts after finalization.
 
@@ -165,7 +163,7 @@ class FileTransferPlugin(star.Star):
         if len(parts) > 2 or not size or not minutes.isascii() or not minutes.isdigit():
             return {
                 "success": False,
-                "message": "用法：/快传授权 [总量，例如 2G] [保留分钟，例如 30]",
+                "message": "用法：/暂传授权 [总量，例如 2G] [保留分钟，例如 30]",
             }
         units = {
             "B": 1,
@@ -197,7 +195,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             return {"success": False, "message": str(exc)}
 
-    @filter.command("快传列表")
+    @filter.command("暂传列表", alias={"快传列表"})
     async def list_command(self, event: AstrMessageEvent):
         """List recent batches for the configured owner.
 
@@ -218,7 +216,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("快传文件")
+    @filter.command("暂传文件", alias={"快传文件"})
     async def files_command(self, event: AstrMessageEvent, args: GreedyStr):
         """List one page of stored files across all managed batches.
 
@@ -238,7 +236,7 @@ class FileTransferPlugin(star.Star):
             not re.fullmatch(r"[0-9]{1,10}", page_text)
             or not 1 <= int(page_text) <= 2**31 - 1
         ):
-            yield event.plain_result("用法：/快传文件 [正整数页码]，默认第 1 页。")
+            yield event.plain_result("用法：/暂传文件 [正整数页码]，默认第 1 页。")
             return
         try:
             result = await self.provider.request(
@@ -248,7 +246,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("快传删除")
+    @filter.command("暂传删除", alias={"快传删除"})
     async def delete_command(self, event: AstrMessageEvent, args: GreedyStr):
         """Delete exactly one file selected by its complete internal identifier.
 
@@ -265,7 +263,7 @@ class FileTransferPlugin(star.Star):
             return
         file_id = str(args).strip()
         if not re.fullmatch(r"[a-f0-9]{32}", file_id):
-            yield event.plain_result("用法：/快传删除 <快传文件中的完整文件ID>")
+            yield event.plain_result("用法：/暂传删除 <暂传文件中的完整文件ID>")
             return
         try:
             result = await self.provider.request(
@@ -278,7 +276,7 @@ class FileTransferPlugin(star.Star):
                 or file.get("id") != file_id
             ):
                 raise TransferProviderError(
-                    "快传服务未确认文件删除，请刷新文件列表检查。"
+                    "暂传服务未确认文件删除，请刷新文件列表检查。"
                 )
             yield event.plain_result(
                 f"已删除文件：{file.get('name', file_id)}\n文件 ID：{file_id}"
@@ -286,7 +284,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("快传撤销")
+    @filter.command("暂传撤销", alias={"快传撤销"})
     async def revoke(self, event: AstrMessageEvent, args: GreedyStr):
         """Revoke an entire batch and stop its active transfers.
 
@@ -303,15 +301,15 @@ class FileTransferPlugin(star.Star):
             return
         batch_id = str(args).strip()
         if not re.fullmatch(r"[a-f0-9]{32}", batch_id):
-            yield event.plain_result("用法：/快传撤销 <快传列表中的完整批次ID>")
+            yield event.plain_result("用法：/暂传撤销 <暂传列表中的完整批次ID>")
             return
         try:
             await self.provider.request("DELETE", f"/admin/batches/{batch_id}", {})
-            yield event.plain_result(f"已撤销并清理快传批次：{batch_id}")
+            yield event.plain_result(f"已撤销并清理暂传批次：{batch_id}")
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("快传状态")
+    @filter.command("暂传状态", alias={"快传状态"})
     async def status_command(self, event: AstrMessageEvent):
         """Perform a real connectivity check against the private listener.
 
@@ -328,9 +326,9 @@ class FileTransferPlugin(star.Star):
         try:
             result = await self.provider.request("GET", "/admin/health")
             yield event.plain_result(
-                "快传服务连接正常。"
+                "暂传服务连接正常。"
                 if result.get("ok") is True
-                else "快传服务尚未就绪。"
+                else "暂传服务尚未就绪。"
             )
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))

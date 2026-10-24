@@ -78,28 +78,28 @@ class TransferProvider:
                 async for chunk in response.content.iter_chunked(16 * 1024):
                     raw.extend(chunk)
                     if len(raw) > 128 * 1024:
-                        raise TransferProviderError("快传服务返回的数据过大。")
+                        raise TransferProviderError("暂传服务返回的数据过大。")
                 try:
                     result = json.loads(raw)
                 except (ValueError, UnicodeError) as exc:
                     raise TransferProviderError(
-                        "快传服务响应异常，请检查管理地址。"
+                        "暂传服务响应异常，请检查管理地址。"
                     ) from exc
                 if not isinstance(result, dict):
-                    raise TransferProviderError("快传服务响应格式无效。")
+                    raise TransferProviderError("暂传服务响应格式无效。")
                 if not 200 <= response.status < 300:
                     message = result.get("message")
                     raise TransferProviderError(
                         message[:200]
                         if isinstance(message, str)
-                        else "快传管理请求失败。"
+                        else "暂传管理请求失败。"
                     )
                 self.last_check_success = True
                 return result
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             self.last_check_success = False
             raise TransferProviderError(
-                "无法连接快传服务，请检查服务状态和内部网络。"
+                "无法连接暂传服务，请检查服务状态和内部网络。"
             ) from exc
         except TransferProviderError:
             self.last_check_success = False
