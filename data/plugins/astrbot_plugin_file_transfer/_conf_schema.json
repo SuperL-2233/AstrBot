@@ -1,0 +1,22 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "启用文件快传管理；需要另外部署独立的文件服务",
+    "default": false
+  },
+  "owner_qq_id": {
+    "type": "string",
+    "description": "唯一允许签发和撤销授权的 QQ 身份；官方机器人使用发送者 openid",
+    "default": ""
+  },
+  "admin_url": {
+    "type": "string",
+    "description": "文件服务的私有管理地址；Docker 部署填写 http://file-transfer:8788，原生部署填写 http://127.0.0.1:8788",
+    "default": "http://127.0.0.1:8788"
+  },
+  "admin_token": {
+    "type": "string",
+    "description": "与独立文件服务相同的管理密钥，至少 32 字符；不可转发给上传者",
+    "default": ""
+  }
+}

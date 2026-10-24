@@ -39,6 +39,8 @@ data/plugins/*
 !data/plugins/astrbot_plugin_baidu_weather/**
 !data/plugins/astrbot_plugin_chelaile_bus/
 !data/plugins/astrbot_plugin_chelaile_bus/**
+!data/plugins/astrbot_plugin_file_transfer/
+!data/plugins/astrbot_plugin_file_transfer/**
 configs/session
 configs/config.yaml
 cmd_config.json
