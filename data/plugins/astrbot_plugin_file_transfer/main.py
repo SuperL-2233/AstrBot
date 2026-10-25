@@ -1,8 +1,7 @@
-import json
 import re
 from decimal import Decimal
 
-from astrbot.api import llm_tool, star
+from astrbot.api import star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -57,7 +56,7 @@ class FileTransferPlugin(star.Star):
             The capability registry's public plugin contract.
         """
         return {
-            "summary": "所有者私聊管理独立暂传授权。",
+            "summary": "仅通过所有者私聊中的暂传命令管理授权和文件。",
             "features": ["上传授权签发", "批次查询与撤销", "存储文件查询与删除"],
             "commands": [
                 "/暂传帮助",
@@ -68,7 +67,7 @@ class FileTransferPlugin(star.Star):
                 "/暂传撤销",
                 "/暂传状态",
             ],
-            "llm_tools": ["create_file_transfer_grant"],
+            "llm_tools": [],
         }
 
     def get_public_status(self) -> dict:
@@ -87,7 +86,7 @@ class FileTransferPlugin(star.Star):
             "last_check_success": self.provider.last_check_success,
         }
 
-    @filter.command("暂传帮助", alias={"快传帮助"})
+    @filter.command("暂传帮助")
     async def help_command(self, event: AstrMessageEvent):
         """Show command syntax to the configured owner.
 
@@ -102,12 +101,12 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(error)
             return
         yield event.plain_result(
-            "暂传\n/暂传授权 [总量] [保留分钟]\n例如：/暂传授权 5G 60\n也可直接说：帮我开一个 5G、保留 60 分钟的暂传授权。\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/暂传列表（批次）\n/暂传文件 [页码]（每页 10 个）\n/暂传删除 <完整文件ID>（仅删除该文件）\n/暂传撤销 <完整批次ID>（清理整批）\n/暂传状态"
+            "暂传\n/暂传授权 [总量] [保留分钟]\n例如：/暂传授权 5G 60\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/暂传列表（批次）\n/暂传文件 [页码]（每页 10 个）\n/暂传删除 <完整文件ID>（仅删除该文件）\n/暂传撤销 <完整批次ID>（清理整批）\n/暂传状态"
         )
 
-    @filter.command("暂传授权", alias={"快传授权"})
+    @filter.command("暂传授权")
     async def authorize(self, event: AstrMessageEvent, args: GreedyStr):
-        """Issue a grant through the same authorization path used by the tool.
+        """Validate command arguments and issue one upload grant.
 
         Args:
             event: Owner-private command event.
@@ -119,36 +118,12 @@ class FileTransferPlugin(star.Star):
         result = await self._create_grant(event, str(args).split())
         yield event.plain_result(result["message"])
 
-    @llm_tool("create_file_transfer_grant")
-    async def tool_create_grant(
-        self,
-        event: AstrMessageEvent,
-        total_size: str = "2G",
-        retention_minutes: int = 30,
-    ) -> str:
-        """Create one Zanchuan upload grant per owner request in owner private chat. Each
-        call creates a new key; call once. Relay entrance/key exactly. Redemption
-        1h, upload window 30m; retention starts after finalization.
-
-        Args:
-            total_size(string): Batch quota: 2G (default), 500M or 5GB. Decimal
-                units; max 10GB.
-            retention_minutes(number): Positive whole retention minutes; default 30.
-
-        Returns:
-            JSON with success and the authorization or error message.
-        """
-        result = await self._create_grant(
-            event, [str(total_size), str(retention_minutes)]
-        )
-        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-
     async def _create_grant(self, event: AstrMessageEvent, parts: list[str]) -> dict:
         """Authorize and validate one grant request without retrying issuance.
 
         Args:
-            event: AstrBot-authenticated sender and chat context, never model input.
-            parts: Separate size and retention arguments, preserving tool boundaries.
+            event: AstrBot-authenticated sender and chat context.
+            parts: Size and retention arguments parsed from the owner command.
 
         Returns:
             A success flag and the formatted grant or a bounded failure message.
@@ -195,7 +170,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             return {"success": False, "message": str(exc)}
 
-    @filter.command("暂传列表", alias={"快传列表"})
+    @filter.command("暂传列表")
     async def list_command(self, event: AstrMessageEvent):
         """List recent batches for the configured owner.
 
@@ -216,7 +191,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("暂传文件", alias={"快传文件"})
+    @filter.command("暂传文件")
     async def files_command(self, event: AstrMessageEvent, args: GreedyStr):
         """List one page of stored files across all managed batches.
 
@@ -246,7 +221,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("暂传删除", alias={"快传删除"})
+    @filter.command("暂传删除")
     async def delete_command(self, event: AstrMessageEvent, args: GreedyStr):
         """Delete exactly one file selected by its complete internal identifier.
 
@@ -284,7 +259,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("暂传撤销", alias={"快传撤销"})
+    @filter.command("暂传撤销")
     async def revoke(self, event: AstrMessageEvent, args: GreedyStr):
         """Revoke an entire batch and stop its active transfers.
 
@@ -309,7 +284,7 @@ class FileTransferPlugin(star.Star):
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
-    @filter.command("暂传状态", alias={"快传状态"})
+    @filter.command("暂传状态")
     async def status_command(self, event: AstrMessageEvent):
         """Perform a real connectivity check against the private listener.
 
