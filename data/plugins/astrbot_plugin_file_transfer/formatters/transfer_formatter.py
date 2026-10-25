@@ -3,17 +3,26 @@ from __future__ import annotations
 from datetime import datetime
 
 
-def format_size(value: int) -> str:
-    """Render a decimal byte count consistently with the public website.
+def format_size(value: int, *, binary: bool = False) -> str:
+    """Render decimal file sizes or binary space allocations.
 
     Args:
         value: Byte count.
+        binary: Use binary units for the global quota and session allocations.
 
     Returns:
-        A compact size with a decimal unit.
+        A compact size using decimal or binary units.
     """
-    for threshold, unit in ((1_000_000_000, "GB"), (1_000_000, "MB"), (1000, "KB")):
+    units = (
+        ((1024**3, "GiB"), (1024**2, "MiB"), (1024, "KiB"))
+        if binary
+        else ((1_000_000_000, "GB"), (1_000_000, "MB"), (1000, "KB"))
+    )
+    for threshold, unit in units:
         if value >= threshold:
+            if binary:
+                size = f"{value / threshold:.3f}".rstrip("0").rstrip(".")
+                return f"{size} {unit}"
             return f"{value / threshold:g}{unit}"
     return f"{value}B"
 
@@ -77,6 +86,57 @@ def format_batches(result: dict) -> str:
             f"{batch['id']}\n{states.get(batch['state'], batch['state'])} · {format_size(batch['quota_bytes'])} · 截止 {clock}"
         )
     return "\n\n".join(lines)
+
+
+def format_space(result: dict) -> str:
+    """Render exact global totals and a bounded page of session allocations.
+
+    Args:
+        result: Private space response with global quota and per-session usage.
+
+    Returns:
+        Owner-visible allocated space, remaining quota, and full batch IDs.
+    """
+    lines = [
+        "暂传空间",
+        f"总上限：{format_size(result['limit_bytes'], binary=True)}",
+        f"已分配：{format_size(result['allocated_bytes'], binary=True)}",
+        f"剩余额度：{format_size(result['available_bytes'], binary=True)}",
+        f"会话：共 {result['total_count']} 个",
+        "签发即占额，整批清理成功后释放。",
+    ]
+    if not result["total_count"]:
+        return "\n".join([*lines, "当前没有暂传会话。"])
+    page, pages = result["page"], result["total_pages"]
+    if not result["batches"]:
+        return "\n".join(
+            [
+                *lines,
+                f"第 {page} 页没有会话，共 {pages} 页。使用 /暂传空间 1 返回首页。",
+            ]
+        )
+    states = {
+        "pending": "待兑换",
+        "uploading": "上传中",
+        "ready": "可下载",
+        "expired": "待清理（仍占额）",
+    }
+    lines.append(f"第 {page}/{pages} 页")
+    for batch in result["batches"]:
+        clock = (
+            datetime.fromtimestamp(batch["deadline"])
+            .astimezone()
+            .strftime("%m-%d %H:%M:%S")
+        )
+        lines.append(
+            f"会话 {batch['id']}\n"
+            f"{states.get(batch['state'], batch['state'])} · 分配 {format_size(batch['quota_bytes'], binary=True)}\n"
+            f"文件预留 {format_size(batch['declared_bytes'], binary=True)} · 已收 {format_size(batch['uploaded_bytes'], binary=True)}\n"
+            f"截止：{clock}"
+        )
+    if page < pages:
+        lines.append(f"下一页：/暂传空间 {page + 1}")
+    return "\n\n".join([*lines, "撤销会话：/暂传撤销 <完整批次ID>"])
 
 
 def format_files(result: dict) -> str:

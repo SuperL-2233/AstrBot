@@ -5,11 +5,16 @@ from astrbot.api import star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .formatters.transfer_formatter import format_batches, format_files, format_grant
+from .formatters.transfer_formatter import (
+    format_batches,
+    format_files,
+    format_grant,
+    format_space,
+)
 from .providers.transfer_provider import TransferProvider, TransferProviderError
 
 
-@star.register("astrbot_plugin_file_transfer", "macroladlezilla", "暂传", "0.2.0")
+@star.register("astrbot_plugin_file_transfer", "macroladlezilla", "暂传", "0.3.0")
 class FileTransferPlugin(star.Star):
     """Owner-only QQ administration for an independent transfer service."""
 
@@ -57,7 +62,12 @@ class FileTransferPlugin(star.Star):
         """
         return {
             "summary": "仅通过所有者私聊中的暂传命令管理授权和文件。",
-            "features": ["上传授权签发", "批次查询与撤销", "存储文件查询与删除"],
+            "features": [
+                "上传授权签发",
+                "批次查询与撤销",
+                "存储文件查询与删除",
+                "总空间与会话分配查询",
+            ],
             "commands": [
                 "/暂传帮助",
                 "/暂传授权",
@@ -66,6 +76,7 @@ class FileTransferPlugin(star.Star):
                 "/暂传删除",
                 "/暂传撤销",
                 "/暂传状态",
+                "/暂传空间",
             ],
             "llm_tools": [],
         }
@@ -101,7 +112,7 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(error)
             return
         yield event.plain_result(
-            "暂传\n/暂传授权 [总量] [保留分钟]\n例如：/暂传授权 5G 60\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/暂传列表（批次）\n/暂传文件 [页码]（每页 10 个）\n/暂传删除 <完整文件ID>（仅删除该文件）\n/暂传撤销 <完整批次ID>（清理整批）\n/暂传状态"
+            "暂传\n/暂传授权 [总量] [保留分钟]\n例如：/暂传授权 5G 60\n默认整批 2GB，最多 10GB，文件保留 30 分钟。\n全局分配上限 10 GiB，签发即占额，整批清理成功后释放。\n通行密钥 1 小时内兑换，兑换后可上传 30 分钟。\n/暂传列表（批次）\n/暂传空间 [页码]（总额度与各会话分配，每页 10 个）\n/暂传文件 [页码]（每页 10 个）\n/暂传删除 <完整文件ID>（仅删除该文件）\n/暂传撤销 <完整批次ID>（清理整批）\n/暂传状态"
         )
 
     @filter.command("暂传授权")
@@ -188,6 +199,36 @@ class FileTransferPlugin(star.Star):
             yield event.plain_result(
                 format_batches(await self.provider.request("GET", "/admin/batches"))
             )
+        except TransferProviderError as exc:
+            yield event.plain_result(str(exc))
+
+    @filter.command("暂传空间")
+    async def space_command(self, event: AstrMessageEvent, args: GreedyStr):
+        """Show the global allocation and one page of session quotas.
+
+        Args:
+            event: Owner-private command event.
+            args: Optional one-based session page number.
+
+        Yields:
+            Space usage or a bounded permission, validation, or service error.
+        """
+        error = self._access_error(event)
+        if error:
+            yield event.plain_result(error)
+            return
+        page_text = str(args).strip() or "1"
+        if (
+            not re.fullmatch(r"[0-9]{1,10}", page_text)
+            or not 1 <= int(page_text) <= 2**31 - 1
+        ):
+            yield event.plain_result("用法：/暂传空间 [正整数页码]，默认第 1 页。")
+            return
+        try:
+            result = await self.provider.request(
+                "GET", f"/admin/space?page={int(page_text)}"
+            )
+            yield event.plain_result(format_space(result))
         except TransferProviderError as exc:
             yield event.plain_result(str(exc))
 
