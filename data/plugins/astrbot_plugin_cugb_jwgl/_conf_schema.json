@@ -64,16 +64,6 @@
     "description": "查找最晚有成绩学期时最多向前回溯的学期数",
     "default": 6
   },
-  "morning_login_enabled": {
-    "type": "bool",
-    "description": "是否启用每天早上的登录态检查与征询",
-    "default": true
-  },
-  "morning_login_cron": {
-    "type": "string",
-    "description": "早晨登录检查的 cron 表达式（分 时 日 月 周）",
-    "default": "0 9 * * *"
-  },
   "timezone": {
     "type": "string",
     "description": "定时任务时区",

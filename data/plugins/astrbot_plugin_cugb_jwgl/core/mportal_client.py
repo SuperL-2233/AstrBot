@@ -48,17 +48,17 @@ async def probe_needs_login(page: Any, base_url: str, timeout_ms: int) -> bool:
             headers={"X-Requested-With": "XMLHttpRequest"},
             timeout=timeout_ms,
         )
+        try:
+            final = urlsplit(response.url)
+            expected_host = urlsplit(base_url).hostname or ""
+            if (final.hostname or "") != expected_host or "login" in final.path.lower():
+                return True
+            body = await response.json()
+            return not (isinstance(body, dict) and body.get("e") == 0)
+        finally:
+            await response.dispose()
     except Exception:
         return True
-    final = urlsplit(response.url)
-    expected_host = urlsplit(base_url).hostname or ""
-    if (final.hostname or "") != expected_host or "login" in final.path.lower():
-        return True
-    try:
-        body = await response.json()
-    except Exception:
-        return True
-    return not (isinstance(body, dict) and body.get("e") == 0)
 
 
 async def open_login_form(page: Any, base_url: str, timeout_ms: int) -> bool:
@@ -250,17 +250,22 @@ class MportalClient:
             f"{self.base_url}/timetable/wap/default/get-index",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        self._check_response_url(response.url)
-        body = await response.json()
-        if not isinstance(body, dict) or body.get("e") != 0:
-            message = (
-                body.get("m", "未知响应") if isinstance(body, dict) else "非 JSON 响应"
-            )
-            raise JwglError(f"mportal 学期信息接口返回失败：{message}")
-        data = body.get("d")
-        if not isinstance(data, dict) or "termInfo" not in data:
-            raise JwglError("mportal 学期信息接口缺少 termInfo")
-        return data
+        try:
+            self._check_response_url(response.url)
+            body = await response.json()
+            if not isinstance(body, dict) or body.get("e") != 0:
+                message = (
+                    body.get("m", "未知响应")
+                    if isinstance(body, dict)
+                    else "非 JSON 响应"
+                )
+                raise JwglError(f"mportal 学期信息接口返回失败：{message}")
+            data = body.get("d")
+            if not isinstance(data, dict) or "termInfo" not in data:
+                raise JwglError("mportal 学期信息接口缺少 termInfo")
+            return data
+        finally:
+            await response.dispose()
 
     async def fetch_week(self, year: str, term: int, week: int) -> dict[str, Any]:
         """POST get-datatmp for one teaching week and normalize the payload.
@@ -278,5 +283,8 @@ class MportalClient:
             form={"year": year, "term": str(term), "week": str(week), "type": "2"},
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        self._check_response_url(response.url)
-        return parse_week_payload(await response.json())
+        try:
+            self._check_response_url(response.url)
+            return parse_week_payload(await response.json())
+        finally:
+            await response.dispose()

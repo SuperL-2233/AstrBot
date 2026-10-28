@@ -17,8 +17,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "poll_interval_minutes": 15,
     "poll_jitter_minutes": 2,
     "scores_probe_max_terms": 6,
-    "morning_login_enabled": True,
-    "morning_login_cron": "0 9 * * *",
     "timezone": "Asia/Shanghai",
     "sms_timeout_seconds": 300,
     "target_umo": "",

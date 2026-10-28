@@ -66,6 +66,9 @@ class BrowserManager:
             if self.context.pages
             else await self.context.new_page()
         )
+        for page in list(self.context.pages):
+            if page is not self.main_page:
+                await page.close()
         return self.context
 
     async def stop(self) -> None:

@@ -107,6 +107,8 @@ class AcademicQueryService:
                 "source": "live",
             }
         except (AuthenticationRequired, JwglError) as error:
+            if isinstance(error, AuthenticationRequired):
+                self.session.state = "expired"
             note = (
                 "登录态已失效"
                 if isinstance(error, AuthenticationRequired)

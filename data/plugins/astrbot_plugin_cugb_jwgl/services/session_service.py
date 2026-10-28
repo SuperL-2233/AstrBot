@@ -58,6 +58,7 @@ class JwglSessionService:
         )
         self.cookie_store = SessionCookieStore(self.settings.session_cookie_path)
         self._browser = BrowserManager(self.settings)
+        self._jwgl_client: JwglClient | None = None
         self._lock = asyncio.Lock()
         self._login_pending = False
         self._login_pending_since: float | None = None
@@ -103,14 +104,19 @@ class JwglSessionService:
     async def stop(self) -> None:
         async with self._lock:
             await self._browser.stop()
+            self._jwgl_client = None
 
     async def _ensure_browser(self) -> Any:
         if self._browser.context is None or self._browser.closed.is_set():
+            await self._browser.stop()
+            self._jwgl_client = None
             self._browser = BrowserManager(self.settings)
             context = await self._browser.start()
             restored = await self.cookie_store.restore(context)
             if restored:
                 logger.info("Restored %d WebVPN session cookie(s)", restored)
+        elif self._browser.main_page is None or self._browser.main_page.is_closed():
+            self._browser.main_page = await self._browser.context.new_page()
         return self._browser.context
 
     async def _open_client(self) -> JwglClient:
@@ -123,9 +129,39 @@ class JwglSessionService:
         if await is_login_page(page):
             self.state = "expired"
             raise AuthenticationRequired("信息门户要求 CAS 登录")
-        jwgl_page = await portal.open_jwgl_from_direct_train()
+        client = self._jwgl_client
+        if client is not None and not client.page.is_closed():
+            await client.page.goto(
+                f"{client.jwgl_base_url}/academic/index_frame.jsp",
+                wait_until="domcontentloaded",
+                timeout=self.settings.navigation_timeout_ms,
+            )
+            if (
+                not await is_login_page(client.page)
+                and "/academic/common/security/affairlogin"
+                not in client.page.url.lower()
+            ):
+                self.state = "active"
+                return client
+            # Rebind an expired academic session through the still-valid portal.
+            self._jwgl_client = None
+            if client.page is page:
+                await portal.open()
+            else:
+                await client.page.close()
+        try:
+            jwgl_page = await portal.open_jwgl_from_direct_train()
+            try:
+                self._jwgl_client = JwglClient(jwgl_page, self.settings)
+            except Exception:
+                if jwgl_page is not page:
+                    await jwgl_page.close()
+                raise
+        except AuthenticationRequired:
+            self.state = "expired"
+            raise
         self.state = "active"
-        return JwglClient(jwgl_page, self.settings)
+        return self._jwgl_client
 
     async def _save_cookies(self) -> None:
         if self._browser.context is None:

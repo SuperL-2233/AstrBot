@@ -81,8 +81,8 @@ class PollService:
         self.weekly = weekly
         self._task: asyncio.Task | None = None
         self._cycle_lock = asyncio.Lock()
-        self._expiry_notified = False
-        self._mportal_auth_notified = False
+        self._expiry_notified = self.repo.get_meta("auth_expiry_notified") == "1"
+        self._mportal_auth_notified = self.repo.get_meta("mportal_auth_notified") == "1"
 
     @property
     def running(self) -> bool:
@@ -99,21 +99,26 @@ class PollService:
                 await self._task
             self._task = None
 
+    def reset_expiry_notification(self) -> None:
+        """Allow one new expiry notification after verified authentication."""
+        self._expiry_notified = False
+        self.repo.set_meta("auth_expiry_notified", "0")
+
     async def _run_loop(self) -> None:
         interval = max(1, float(self.config.get("poll_interval_minutes", 15))) * 60
         jitter = max(0, float(self.config.get("poll_jitter_minutes", 2))) * 60
         while True:
             await asyncio.sleep(interval + random.uniform(-jitter, jitter))
-            if self.session.state != "active":
+            if self.session.state != "active" and not (
+                self.session.state == "expired" and not self._expiry_notified
+            ):
                 continue
             try:
                 await self.poll_now(trigger="auto")
             except Exception as error:
                 logger.warning("自动轮询异常：%s", safe_exception_name(error))
 
-    async def poll_now(
-        self, trigger: str = "manual", notify_expiry: bool = True
-    ) -> dict[str, Any]:
+    async def poll_now(self, trigger: str = "manual") -> dict[str, Any]:
         async with self._cycle_lock:
             if self.session.login_pending:
                 return {
@@ -127,15 +132,22 @@ class PollService:
                     scores_backfill=scores_backfill,
                     courses_backfill=courses_backfill,
                 )
+                self.reset_expiry_notification()
                 result["mportal"] = await self._scan_mportal(result["current_period"])
             except AuthenticationRequired as error:
+                self.session.state = "expired"
                 self.repo.record_poll("AUTH_REQUIRED", str(error))
-                if notify_expiry and not self._expiry_notified:
-                    self._expiry_notified = True
-                    await self.push(
-                        "教务系统登录态已失效，轮询已暂停。"
-                        "请发送 /教务登录 重新登录，或等待明早的登录提醒。"
-                    )
+                if not self._expiry_notified:
+                    try:
+                        delivered = await self.push(
+                            "教务系统登录态已失效，轮询已暂停。"
+                            "请发送 /教务登录 重新登录；本次失效只提醒一次。"
+                        )
+                        if delivered and self.session.state == "expired":
+                            self._expiry_notified = True
+                            self.repo.set_meta("auth_expiry_notified", "1")
+                    except Exception:
+                        logger.exception("Failed to deliver JWGL session expiry notice")
                 return {"success": False, "message": "登录态已失效，需要重新登录。"}
             except Exception as error:
                 self.repo.record_poll("ERROR", safe_exception_name(error))
@@ -145,7 +157,6 @@ class PollService:
                     "message": f"轮询失败（{safe_exception_name(error)}），本次不算登录态失效。",
                 }
 
-            self._expiry_notified = False
             outcome = await self._diff_and_store(
                 result, scores_backfill, courses_backfill
             )
@@ -217,16 +228,19 @@ class PollService:
             # 不影响教务处主流程；提醒用户补一次登录（节流一次）。
             logger.warning("mportal 缺少 CAS 会话，本轮跳过结构化课表扫描")
             if not self._mportal_auth_notified:
-                self._mportal_auth_notified = True
-                await self.push(
+                delivered = await self.push(
                     "mportal 结构化课表需要单独登录一次统一认证：请发送 /教务登录，"
                     "按提示再提交一次短信验证码即可，之后会自动保持。"
                 )
+                if delivered:
+                    self._mportal_auth_notified = True
+                    self.repo.set_meta("mportal_auth_notified", "1")
             return None
         except Exception as error:
             logger.warning("mportal 全周课表扫描失败：%s", safe_exception_name(error))
             return None
         self._mportal_auth_notified = False
+        self.repo.set_meta("mportal_auth_notified", "0")
         return {
             **result,
             "backfill": backfill,

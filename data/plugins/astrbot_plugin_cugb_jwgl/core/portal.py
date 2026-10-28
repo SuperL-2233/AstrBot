@@ -89,37 +89,54 @@ class PortalClient:
             raise JwglError("门户未渲染 系统直通车 → 教务管理 入口")
 
         existing_pages = set(self.page.context.pages)
-        await target.scroll_into_view_if_needed()
-        await target.click()
+        jwgl_page = None
+        try:
+            await target.scroll_into_view_if_needed()
+            await target.click()
 
-        deadline = asyncio.get_running_loop().time() + 30
-        while asyncio.get_running_loop().time() < deadline:
-            pages = [
-                *[
-                    page
-                    for page in self.page.context.pages
-                    if page not in existing_pages
-                ],
-                self.page,
-            ]
-            for candidate in pages:
-                candidate_path = urlsplit(candidate.url).path.lower()
-                if "/academic/" not in candidate_path:
-                    continue
-                try:
-                    await candidate.wait_for_load_state(
-                        "domcontentloaded", timeout=5_000
-                    )
-                except Exception:
-                    pass
-                await reject_legacy_affair_login(candidate)
-                if "/academic/login/cugb/loginids6valid.jsp" in candidate_path:
-                    await asyncio.sleep(0.25)
-                    continue
-                logger.info("Portal SSO opened the JWGL system")
-                return candidate
-            await asyncio.sleep(0.25)
-        raise JwglError("点击门户的教务管理入口后没有打开 /academic/ 页面")
+            deadline = asyncio.get_running_loop().time() + 30
+            while asyncio.get_running_loop().time() < deadline:
+                pages = [
+                    *[
+                        page
+                        for page in self.page.context.pages
+                        if page not in existing_pages
+                    ],
+                    self.page,
+                ]
+                for candidate in pages:
+                    if candidate.is_closed():
+                        continue
+                    candidate_path = urlsplit(candidate.url).path.lower()
+                    if "/academic/" not in candidate_path:
+                        continue
+                    try:
+                        await candidate.wait_for_load_state(
+                            "domcontentloaded", timeout=5_000
+                        )
+                    except Exception:
+                        pass
+                    candidate_path = urlsplit(candidate.url).path.lower()
+                    if "/academic/" not in candidate_path:
+                        continue
+                    await reject_legacy_affair_login(candidate)
+                    if "/academic/login/cugb/loginids6valid.jsp" in candidate_path:
+                        await asyncio.sleep(0.25)
+                        continue
+                    if await is_login_page(candidate):
+                        raise AuthenticationRequired("教务系统要求重新进行 CAS 登录")
+                    logger.info("Portal SSO opened the JWGL system")
+                    jwgl_page = candidate
+                    return jwgl_page
+                await asyncio.sleep(0.25)
+            for candidate in self.page.context.pages:
+                if not candidate.is_closed() and await is_login_page(candidate):
+                    raise AuthenticationRequired("门户 SSO 要求重新进行 CAS 登录")
+            raise JwglError("点击门户的教务管理入口后没有打开 /academic/ 页面")
+        finally:
+            for page in list(self.page.context.pages):
+                if page not in existing_pages and page is not jwgl_page:
+                    await page.close()
 
 
 class JwglClient:

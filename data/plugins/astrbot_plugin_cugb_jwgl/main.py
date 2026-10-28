@@ -69,26 +69,18 @@ class CugbJwglPlugin(star.Star):
         )
 
     async def initialize(self) -> None:
+        try:
+            for job in await self.context.cron_manager.list_jobs(job_type="basic"):
+                if job.name == "cugb_jwgl_morning_login":
+                    await self.context.cron_manager.delete_job(job.job_id)
+        except Exception:
+            logger.exception("Failed to remove obsolete JWGL morning login jobs")
         if self.config.get("enabled", True):
             self.poll_service.start()
             self._startup_task = asyncio.create_task(self._startup_probe())
             logger.info("CUGB 教务监控轮询循环已启动")
         else:
             logger.info("CUGB 教务监控已禁用")
-        if self.config.get("morning_login_enabled", True):
-            try:
-                await self.context.cron_manager.add_basic_job(
-                    name="cugb_jwgl_morning_login",
-                    cron_expression=str(
-                        self.config.get("morning_login_cron", "0 9 * * *")
-                    ),
-                    handler=self.consent_service.morning_check,
-                    timezone=str(self.config.get("timezone", "Asia/Shanghai")),
-                    persistent=False,
-                )
-                logger.info("CUGB 教务早晨登录检查已注册")
-            except Exception as error:
-                logger.warning("注册早晨登录检查失败：%s", safe_exception_name(error))
         if self.config.get("class_reminder_enabled", True):
             self.reminder_service.start()
             logger.info("CUGB 上课提醒循环已启动")
@@ -110,7 +102,7 @@ class CugbJwglPlugin(star.Star):
         if not self.session_service.portal_configured:
             return
         try:
-            await self.poll_service.poll_now(trigger="startup", notify_expiry=False)
+            await self.poll_service.poll_now(trigger="startup")
         except Exception as error:
             logger.warning("启动探测异常：%s", safe_exception_name(error))
 
@@ -128,9 +120,9 @@ class CugbJwglPlugin(star.Star):
 
     def get_public_capabilities(self) -> dict:
         return {
-            "summary": "每日定时登录 CUGB 教务系统，监控课表、成绩与考试安排变化并向绑定 QQ 私聊推送，命令与 LLM 查询优先读取本地缓存，支持主动刷新。",
+            "summary": "监控 CUGB 教务系统课表、成绩与考试安排变化并向绑定 QQ 私聊推送，登录失效只提醒一次，命令与 LLM 查询优先读取本地缓存，支持主动刷新。",
             "features": [
-                "每天早上按 cron 检查登录态，失效时 QQ 征询后自动发送短信验证码登录",
+                "确认登录失效后只提醒一次，重新登录成功后重置提醒；学校短信验证码由用户提交",
                 "登录后每 15±2 分钟轮询，兼具 WebVPN 与会话续期",
                 "成绩自动定位最晚有成绩的学期，寒暑假默认页无成绩时自动回溯",
                 "课表、成绩、考试快照 diff，新增或变化行 QQ 推送",
@@ -279,7 +271,7 @@ class CugbJwglPlugin(star.Star):
             "/教务考试\n"
             "/教务绑定\n"
             "/教务解绑\n"
-            "每天早上检查登录态；登录时学校会向你的手机发短信验证码，"
+            "确认登录失效后只提醒一次；登录时学校会向你的手机发短信验证码，"
             "把验证码发给我即可完成登录。登录后每 15±2 分钟自动轮询并推送新数据。"
         )
 

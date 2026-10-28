@@ -223,22 +223,28 @@ class _ProbeResponse:
     def __init__(self, url: str, body: dict | None = None) -> None:
         self.url = url
         self._body = body
+        self.disposed = False
 
     async def json(self) -> dict:
         if self._body is None:
             raise ValueError("not a JSON response")
         return self._body
 
+    async def dispose(self) -> None:
+        self.disposed = True
+
 
 class _ProbeRequest:
     def __init__(self, final_url: str | None, body: dict | None = None) -> None:
         self._final_url = final_url
         self._body = body
+        self.last_response: _ProbeResponse | None = None
 
     async def get(self, *_args, **_kwargs) -> _ProbeResponse:
         if self._final_url is None:
             raise RuntimeError("net::ERR_TOO_MANY_REDIRECTS")
-        return _ProbeResponse(self._final_url, self._body)
+        self.last_response = _ProbeResponse(self._final_url, self._body)
+        return self.last_response
 
 
 class _ProbeContext:
@@ -258,10 +264,13 @@ async def test_probe_needs_login_uses_api_not_page_navigation():
         "https://mportal.cugb.edu.cn/timetable/wap/default/get-index", {"e": 0}
     )
     assert await probe_needs_login(ok, base, 30_000) is False
+    assert ok.context.request.last_response.disposed
     cas = _ProbePage("https://sso.cugb.edu.cn/authserver/login?service=x")
     assert await probe_needs_login(cas, base, 30_000) is True
+    assert cas.context.request.last_response.disposed
     redirected = _ProbePage("https://mportal.cugb.edu.cn/uc/wap/login?redirect=")
     assert await probe_needs_login(redirected, base, 30_000) is True
+    assert redirected.context.request.last_response.disposed
     broken = _ProbePage(None)
     assert await probe_needs_login(broken, base, 30_000) is True
 
@@ -274,8 +283,10 @@ async def test_probe_needs_login_detects_expired_app_session_body():
         {"e": 10013, "m": "用户信息已失效,请重新进入页面"},
     )
     assert await probe_needs_login(expired, base, 30_000) is True
+    assert expired.context.request.last_response.disposed
     not_json = _ProbePage("https://mportal.cugb.edu.cn/timetable/wap/default/get-index")
     assert await probe_needs_login(not_json, base, 30_000) is True
+    assert not_json.context.request.last_response.disposed
 
 
 class _StubSession:
@@ -308,6 +319,10 @@ class _StubSession:
 class _StubPoll:
     def __init__(self) -> None:
         self.started = False
+        self.expiry_resets = 0
+
+    def reset_expiry_notification(self) -> None:
+        self.expiry_resets += 1
 
     def start(self) -> None:
         self.started = True
@@ -369,6 +384,21 @@ async def test_submit_sms_code_validates_input_and_pending():
     result = await consent.submit_sms_code("123456")
     assert result["success"] is False
     assert "没有等待验证码" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_verified_login_resets_expiry_notice_and_starts_polling():
+    poll = _StubPoll()
+    consent = _consent(_StubSession(begin_stage="reuse"), poll)
+    await consent.request_login()
+    assert poll.expiry_resets == 1
+    assert poll.started
+
+    consent.session.login_pending = True
+    result = await consent.submit_sms_code("123456")
+    assert result["success"] is True
+    assert poll.expiry_resets == 2
+    await asyncio.sleep(0)
 
 
 TERM_INFO = {

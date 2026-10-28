@@ -31,23 +31,6 @@ class ConsentService:
         self.push = push
         self.get_target_umo = get_target_umo
 
-    async def morning_check(self, **_kwargs: Any) -> None:
-        """cron 触发的早晨例行检查：登录态失效时提醒用户，由用户发起登录。"""
-        if self.session.state == "active":
-            self.poll_service.start()
-            logger.info("早晨检查：登录态仍有效，仅确保轮询运行")
-            return
-        if not self.get_target_umo():
-            logger.warning("早晨检查：未绑定推送目标，跳过登录提醒")
-            return
-        if not self.session.portal_configured:
-            logger.warning("早晨检查：portal_url 未配置，跳过登录提醒")
-            return
-        await self.push(
-            "早上好！教务系统登录态已失效。需要重新登录时，直接对我说“登录教务系统”"
-            "或发送 /教务登录，学校会向你的手机发送短信验证码。"
-        )
-
     async def request_login(self, resend: bool = False) -> str:
         """发起登录：同步执行到学校短信验证码发出为止，返回真实结果或失败原因。
 
@@ -67,6 +50,7 @@ class ConsentService:
             logger.exception("教务系统登录发起异常")
             return f"教务系统登录发起异常（{safe_exception_name(error)}）。"
         if stage == "reuse":
+            self.poll_service.reset_expiry_notification()
             self.poll_service.start()
             return "教务系统会话仍然有效，无需重新登录。"
         if stage == "sms_resent":
@@ -131,6 +115,7 @@ class ConsentService:
                     "学校已重新发送 6 位验证码到你的手机，请再回复一次验证码完成最后一步。"
                 ),
             }
+        self.poll_service.reset_expiry_notification()
         await self.push("教务系统登录成功，将立即执行一次数据检查并开始定时轮询。")
         self.poll_service.start()
         asyncio.create_task(self.poll_service.poll_now(trigger="post-login"))
