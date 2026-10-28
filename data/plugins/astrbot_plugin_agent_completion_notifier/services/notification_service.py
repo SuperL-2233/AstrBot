@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -83,14 +84,30 @@ class NotificationService:
             "target_bound": target_bound,
             "listen": f"{self.config.get('host')}:{self.config.get('port')}",
             "path": self.config.get("path"),
+            "notify_path": self.config.get("notify_path", "/api/hooks/notify"),
         }
 
     async def deliver(
         self,
         payload: Any,
         send_message: Callable[[str, str], Awaitable[bool]],
+        *,
+        generic: bool = False,
     ) -> dict[str, Any]:
-        data = self._validate(payload)
+        """Validate and deliver an agent event or a custom notification.
+
+        Args:
+            payload: Parsed webhook JSON object.
+            send_message: AstrBot sender returning whether an adapter was invoked.
+            generic: Use the title/message contract instead of an agent event.
+
+        Returns:
+            Delivery result including whether an event ID was already claimed.
+
+        Raises:
+            NotificationRequestError: Invalid payload, missing target, or failed send.
+        """
+        data = self._validate(payload, generic=generic)
         target_umo = self.get_target_umo()
         if not target_umo:
             raise NotificationRequestError(
@@ -99,29 +116,47 @@ class NotificationService:
                 503,
             )
 
-        if not self.repository.claim_event(data["event_id"], data["source"]):
+        event_id = data["event_id"]
+        if event_id and not self.repository.claim_event(event_id, data["source"]):
             return {"success": True, "duplicate": True, "message": "事件已处理。"}
 
         try:
-            sent = await send_message(target_umo, self._format_message(data))
+            sent = await send_message(
+                target_umo, self._format_message(data, generic=generic)
+            )
             if not sent:
                 raise RuntimeError("AstrBot 未找到与目标会话匹配的平台适配器。")
+        except asyncio.CancelledError:
+            if event_id:
+                self.repository.release_event(event_id)
+            raise
         except Exception as exc:
-            self.repository.release_event(data["event_id"])
+            if event_id:
+                self.repository.release_event(event_id)
             raise NotificationRequestError(
                 f"QQ 消息发送失败：{exc}",
                 "NOTIFICATION_DELIVERY_FAILED",
                 502,
             ) from exc
 
-        self.repository.mark_delivered(data["event_id"])
+        if event_id:
+            self.repository.mark_delivered(event_id)
         return {"success": True, "duplicate": False, "message": "通知已推送。"}
 
-    def _validate(self, payload: Any) -> dict[str, str]:
+    def _validate(self, payload: Any, *, generic: bool = False) -> dict[str, str]:
         if not isinstance(payload, dict):
             raise NotificationRequestError(
                 "请求体必须是 JSON 对象。", "INVALID_JSON_BODY"
             )
+
+        if generic:
+            return {
+                "title": self._optional_field(payload, "title", 200),
+                "message": self._field(payload, "message", 12000),
+                "source": self._optional_field(payload, "source", 32).lower()
+                or "generic",
+                "event_id": self._optional_field(payload, "event_id", 200),
+            }
 
         source = self._field(payload, "source", 32).lower()
         allowed_sources = {
@@ -173,15 +208,22 @@ class NotificationService:
             raise NotificationRequestError(f"字段过长：{name}。", "FIELD_TOO_LONG")
         return value
 
-    def _format_message(self, data: dict[str, str]) -> str:
-        source_name = {"codex": "Codex", "opencode": "OpenCode"}.get(
-            data["source"], data["source"]
-        )
-        label = data["host"] or f"服务器-{source_name}"
-        lines = [f"{label} 会话结束", f"会话：{data['session_id']}"]
-        if data["message"]:
-            lines.extend(["", _strip_markdown(data["message"])])
-        text = "\n".join(lines)
+    def _format_message(self, data: dict[str, str], *, generic: bool = False) -> str:
+        if generic:
+            text = (
+                f"{data['title']}\n\n{data['message']}"
+                if data["title"]
+                else data["message"]
+            )
+        else:
+            source_name = {"codex": "Codex", "opencode": "OpenCode"}.get(
+                data["source"], data["source"]
+            )
+            label = data["host"] or f"服务器-{source_name}"
+            lines = [f"{label} 会话结束", f"会话：{data['session_id']}"]
+            if data["message"]:
+                lines.extend(["", _strip_markdown(data["message"])])
+            text = "\n".join(lines)
         limit = max(100, int(self.config.get("max_message_chars", 1500)))
         if len(text) > limit:
             text = text[: limit - 12].rstrip() + "\n…（已截断）"

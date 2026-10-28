@@ -1,7 +1,7 @@
 name: astrbot_plugin_agent_completion_notifier
-display_name: 开发工具结束通知
+display_name: 通知接收与推送
 author: macroladlezilla
-description: 接收配置中允许的 agent 一轮结束事件，并通过 AstrBot 主动推送到已绑定的 QQ 私聊。
-short_desc: AI agent 对话结束 QQ 通知。
-version: 0.1.1
+description: 接收 agent 一轮结束事件和自定义标题、正文的通用通知，并通过 AstrBot 推送到已绑定的 QQ 私聊。
+short_desc: 自定义通知与 AI agent 结束通知推送。
+version: 0.2.0
 repo: https://github.com/macroladlezilla/astrbot_plugin_agent_completion_notifier

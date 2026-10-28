@@ -9,6 +9,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "host": "127.0.0.1",
     "port": 8766,
     "path": "/api/hooks/agent-completed",
+    "notify_path": "/api/hooks/notify",
     "secret": "",
     "target_umo": "",
     "database": "agent_notifications.sqlite",

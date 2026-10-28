@@ -1,1 +1,1 @@
-"""AstrBot plugin for completion notifications from configured AI agents."""
+"""AstrBot plugin for custom notifications and AI agent completion events."""

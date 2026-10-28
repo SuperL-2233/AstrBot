@@ -21,8 +21,13 @@
   },
   "path": {
     "type": "string",
-    "description": "webhook HTTP 路径",
+    "description": "agent 完成事件的 webhook HTTP 路径（保留旧接口）",
     "default": "/api/hooks/agent-completed"
+  },
+  "notify_path": {
+    "type": "string",
+    "description": "通用自定义通知的 HTTP 路径，须与 agent 接口路径不同",
+    "default": "/api/hooks/notify"
   },
   "secret": {
     "type": "string",
@@ -41,7 +46,7 @@
   },
   "allowed_sources": {
     "type": "list",
-    "description": "允许发送回调的 agent 来源名称，可添加任意名称；空列表拒绝所有来源",
+    "description": "agent 接口允许的来源名称；空列表拒绝所有 agent 来源，不限制通用通知接口",
     "default": ["codex", "opencode"]
   },
   "max_body_bytes": {
