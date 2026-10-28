@@ -41,7 +41,7 @@
   },
   "allowed_sources": {
     "type": "list",
-    "description": "允许发送回调的开发工具来源",
+    "description": "允许发送回调的 agent 来源名称，可添加任意名称；空列表拒绝所有来源",
     "default": ["codex", "opencode"]
   },
   "max_body_bytes": {

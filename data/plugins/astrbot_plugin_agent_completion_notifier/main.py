@@ -55,7 +55,7 @@ class AgentCompletionNotifierPlugin(star.Star):
     def get_public_capabilities(self) -> dict:
         """Describe notifier features using the project plugin contract."""
         return {
-            "summary": "接收 Codex/OpenCode 完成事件并推送到绑定私聊。",
+            "summary": "接收配置中允许的 agent 完成事件并推送到绑定私聊。",
             "features": ["开发工具完成事件接收", "QQ 私聊主动通知"],
             "commands": ["/开发通知状态", "/开发通知绑定", "/开发通知解绑"],
             "llm_tools": [],
@@ -94,7 +94,7 @@ class AgentCompletionNotifierPlugin(star.Star):
             yield event.plain_result(access_error)
             return
         self.notification_service.bind_target(event.unified_msg_origin)
-        yield event.plain_result("已将 Codex/OpenCode 对话结束通知绑定到当前私聊。")
+        yield event.plain_result("已将开发工具对话结束通知绑定到当前私聊。")
 
     @filter.command("开发通知解绑")
     async def unbind_notification(self, event: AstrMessageEvent):

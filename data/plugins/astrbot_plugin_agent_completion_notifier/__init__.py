@@ -1,1 +1,1 @@
-"""AstrBot plugin for Codex and OpenCode completion notifications."""
+"""AstrBot plugin for completion notifications from configured AI agents."""

@@ -127,11 +127,12 @@ class NotificationService:
         allowed_sources = {
             str(item).lower() for item in self.config.get("allowed_sources", [])
         }
-        if source not in self.EVENT_BY_SOURCE or source not in allowed_sources:
+        if source not in allowed_sources:
             raise NotificationRequestError("不支持的通知来源。", "UNSUPPORTED_SOURCE")
 
         event = self._field(payload, "event", 64)
-        if event != self.EVENT_BY_SOURCE[source]:
+        expected_event = self.EVENT_BY_SOURCE.get(source)
+        if expected_event is not None and event != expected_event:
             raise NotificationRequestError("来源与结束事件不匹配。", "INVALID_EVENT")
 
         return {
@@ -173,7 +174,9 @@ class NotificationService:
         return value
 
     def _format_message(self, data: dict[str, str]) -> str:
-        source_name = "Codex" if data["source"] == "codex" else "OpenCode"
+        source_name = {"codex": "Codex", "opencode": "OpenCode"}.get(
+            data["source"], data["source"]
+        )
         label = data["host"] or f"服务器-{source_name}"
         lines = [f"{label} 会话结束", f"会话：{data['session_id']}"]
         if data["message"]:

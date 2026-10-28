@@ -1,7 +1,7 @@
 # astrbot_plugin_agent_completion_notifier
 
-独立的 AstrBot 开发工具结束通知插件。接收 Codex/OpenCode 一轮结束事件，并通过已绑定的
-AstrBot 会话主动推送到 QQ。它不依赖 CUGB 校园助手插件。
+独立的 AstrBot 开发工具结束通知插件。接收配置中允许的 AI agent 一轮结束事件，并通过已绑定的
+AstrBot 会话主动推送到 QQ。附带 Codex/OpenCode 客户端示例，不依赖 CUGB 校园助手插件。
 
 ## 服务端配置
 
@@ -26,6 +26,10 @@ AstrBot 会话主动推送到 QQ。它不依赖 CUGB 校园助手插件。
 插件持久化当前 `unified_msg_origin`。如果直接设置 `target_umo`，配置值优先于命令绑定值。
 运行数据位于 `data/plugin_data/astrbot_plugin_agent_completion_notifier/`。
 
+`allowed_sources` 仍默认为 `["codex", "opencode"]`，旧配置无需迁移。接入其他 agent 时，
+将其 `source` 名称加入列表即可，无需修改服务端代码。来源名称比较不区分大小写；
+空列表仍表示拒绝所有来源。现有鉴权、绑定和数据库配置继续生效。
+
 默认只监听回环地址。跨主机使用时，建议由 Caddy/Nginx 提供 HTTPS 并反向代理到
 `127.0.0.1:8766`。不要在公网明文暴露端口，也不要提交密钥、QQ 标识或运行数据库。
 
@@ -40,13 +44,32 @@ AstrBot 会话主动推送到 QQ。它不依赖 CUGB 校园助手插件。
   "event_id": "codex:<thread-id>:<turn-id>",
   "session_id": "<thread-id>",
   "project": "project-name",
-  "host": "<推送标题中的来源名称，可选，缺省显示为 服务器-OpenCode/Codex>",
+  "host": "<推送标题中的来源名称，可选，缺省显示为 服务器-来源名称>",
   "message": "本轮最终回复"
 }
 ```
 
-`source=opencode` 时，`event` 必须是 `session.idle`。`event_id` 用于幂等去重；只有 QQ
-推送成功后才记为已交付，发送失败可重试。
+Codex/OpenCode 的现有回调保持兼容：`source=codex` 时，`event` 必须是
+`agent-turn-complete`；`source=opencode` 时，`event` 必须是 `session.idle`。
+其他已配置来源可自行定义非空 `event` 名称（最长 64 字符），客户端仅应在一轮结束时发送。
+所有来源仍须提供非空字符串 `source`（最长 32 字符）、`event_id` 和 `session_id`
+（各最长 200 字符）。`event_id` 用于全局幂等去重，建议包含来源和会话标识；只有 QQ
+推送成功后才记为已交付，发送失败可重试。未指定 `host` 时，Codex/OpenCode 保持原有显示名，
+其他来源显示为 `服务器-<小写 source>`。
+
+例如，在 `allowed_sources` 中加入 `custom-agent` 后，客户端可发送：
+
+```json
+{
+  "source": "custom-agent",
+  "event": "turn.finished",
+  "event_id": "custom-agent:<session-id>:<turn-id>",
+  "session_id": "<session-id>",
+  "message": "本轮最终回复"
+}
+```
+
+其他 agent 需要自行适配上述 HTTP 协议；插件未内置其客户端 hook。
 
 ## Codex 客户端
 
